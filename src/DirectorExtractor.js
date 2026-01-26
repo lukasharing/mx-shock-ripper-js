@@ -1,5 +1,5 @@
 /**
- * @version 1.1.1
+ * @version 1.1.2
  * DirectorExtractor.js - Strategic extraction orchestrator for Adobe Director assets
  * 
  * This class coordinates the high-level extraction workflow, managing 
@@ -14,7 +14,7 @@ const Color = require('./utils/Color');
 const DirectorFile = require('./DirectorFile');
 const CastMember = require('./CastMember');
 const DataStream = require('./utils/DataStream');
-const { MemberType, Magic, KeyTableValues, Resources, LingoConfig } = require('./Constants');
+const { MemberType, Magic, AfterburnerTags, KeyTableValues, Resources, LingoConfig } = require('./Constants');
 
 // Component Extractors
 const BitmapExtractor = require('./member/BitmapExtractor');
@@ -49,8 +49,7 @@ class DirectorExtractor {
             extractXtra: options.xtra ?? true,
             extractText: options.text ?? true,
             extractField: options.field ?? true,
-            colored: options.colored ?? false,
-            ...options
+            colored: options.colored ?? false
         };
 
         this.outputDir = outputDir || path.join(process.cwd(), 'extractions', this.baseName);
@@ -81,6 +80,7 @@ class DirectorExtractor {
         this.lnamParser = new LnamParser(logProxy);
 
         this.nameTable = {};
+        this.lctxMap = {};
         this.sharedPalettes = {};
     }
 
@@ -101,6 +101,12 @@ class DirectorExtractor {
         // 1. Initial Mapping & Metadata Extraction
         await this.parseKeyTable();
         await this.parseNameTable();
+        await this.parseLctxMap();
+
+        // 2. Extract Config & Context
+        await this.extractConfig();
+        await this.extractTimeline();
+        await this.extractCastList();
 
         if (!fs.existsSync(this.outputDir)) fs.mkdirSync(this.outputDir, { recursive: true });
 
@@ -108,7 +114,7 @@ class DirectorExtractor {
         const processingQueue = [];
         for (const chunk of this.dirFile.chunks) {
             const upType = chunk.type.toUpperCase();
-            if (['CAST', 'CAS*', 'CAS '].includes(upType)) {
+            if ([Magic.CAST.toUpperCase(), AfterburnerTags['CAS*'].toUpperCase(), Magic.CAST_SPACE.toUpperCase()].includes(upType)) {
                 try {
                     const member = await this.parseMemberMetadata(chunk);
                     if (member) processingQueue.push({ member, chunk });
@@ -136,34 +142,152 @@ class DirectorExtractor {
 
         // 3. Finalization
         this.metadata.members = this.members.map(m => m.toJSON());
-        this.saveResults();
+
+        this.log('INFO', `===== EXTRACTION SUMMARY =====`);
+        this.log('INFO', `Total Members: ${this.members.length}`);
+        this.log('INFO', `Scripts: ${this.stats.byType['Script'] || 0}`);
+        if (this.stats.protectedScripts > 0) this.log('INFO', `Protected Scripts: ${this.stats.protectedScripts}`);
+        this.log('INFO', `Bitmaps: ${this.stats.byType['Bitmap'] || 0}`);
+        this.log('INFO', `==============================`);
+
+        this.saveJSON();
+        this.saveLog();
         this.log('SUCCESS', `Extraction complete. Processed ${this.stats.total} members.`);
+    }
+
+    async extractConfig() {
+        const configTags = [Magic.VWSC, Magic.VWCF, Magic.conf, Magic.VWky, Magic.DRCF];
+        const chunk = this.dirFile.chunks.find(c => configTags.includes(c.type));
+        if (!chunk) return;
+
+        const isMovie = [Magic.MV93, Magic.MVPV].includes(this.dirFile.subtype) ||
+            this.dirFile.chunks.some(c => [Magic.VWSC, Magic.SCORE, Magic.MCsL, Magic.Lscl].includes(c.type));
+
+        if (!isMovie) return;
+
+        const data = await this.dirFile.getChunkData(chunk);
+        if (!data) return;
+
+        const ds = new DataStream(data, 'big');
+        ds.readInt16(); // len
+        const fileVer = ds.readInt16();
+        const stage = { top: ds.readInt16(), left: ds.readInt16(), bottom: ds.readInt16(), right: ds.readInt16() };
+
+        ds.readInt16(); // minMember
+        ds.readInt16(); // maxMember
+        ds.seek(Offsets.DirConfig.DirectorVersion);
+        const dirVer = ds.readInt16();
+
+        ds.seek(Offsets.DirConfig.FrameRate);
+        const frameRate = ds.readInt16();
+        const platform = ds.readInt16();
+        const protection = ds.readInt16();
+
+        this.metadata.movie = {
+            fileVersion: fileVer,
+            directorVersion: dirVer,
+            stageRect: stage,
+            frameRate,
+            platform,
+            protection,
+            humanVersion: this.humanVersion(dirVer)
+        };
+        fs.writeFileSync(path.join(this.outputDir, 'movie.json'), JSON.stringify(this.metadata.movie, null, 2));
+    }
+
+    humanVersion(ver) {
+        return ver; // Logic can be expanded based on Director version mapping
+    }
+
+    async extractTimeline() {
+        const scoreChunk = this.dirFile.chunks.find(c => c.type === Magic.VWSC || c.type === Magic.SCORE);
+        if (!scoreChunk) return;
+
+        const timeline = {
+            hasScore: true,
+            chunks: [{
+                id: scoreChunk.id,
+                type: scoreChunk.type,
+                size: scoreChunk.len,
+                note: "Internal parsing not implemented"
+            }]
+        };
+        fs.writeFileSync(path.join(this.outputDir, 'timeline.json'), JSON.stringify(timeline, null, 2));
+    }
+
+    async extractCastList() {
+        const chunk = this.dirFile.chunks.find(c => c.type === Magic.MCsL || c.type === Magic.Lscl);
+        if (!chunk) return;
+
+        const data = await this.dirFile.getChunkData(chunk);
+        if (!data) return;
+
+        const castList = [];
+        let pos = 0;
+        while (pos < data.length - 2) {
+            const len = data.readUInt16BE(pos);
+            if (len > 0 && len < 256 && (pos + 2 + len + 2) < data.length) {
+                const name = data.slice(pos + 2, pos + 2 + len).toString();
+                let p2 = pos + 2 + len;
+                if (p2 + 2 < data.length) {
+                    const len2 = data.readUInt16BE(p2);
+                    if (len2 >= 0 && len2 < 512) {
+                        const pathStr = data.slice(p2 + 2, p2 + 2 + len2).toString();
+                        castList.push({ name, path: pathStr });
+                        pos = p2 + 2 + len2 + 9;
+                        continue;
+                    }
+                }
+            }
+            pos++;
+        }
+
+        if (castList.length > 0) {
+            fs.writeFileSync(path.join(this.outputDir, 'castlibs.json'), JSON.stringify({ casts: castList }, null, 2));
+        }
     }
 
     /**
      * Maps physical chunk IDs to logical member IDs using the KEY table.
      */
     async parseKeyTable() {
-        const keyChunk = this.dirFile.chunks.find(c => ['KEY*', 'KEY '].includes(c.type.toUpperCase()));
+        const keyChunk = this.dirFile.chunks.find(c => {
+            const unprot = DirectorFile.unprotect(c.type).toUpperCase();
+            return [Magic.KEY.toUpperCase(), Magic.KEY_SPACE.toUpperCase()].includes(unprot);
+        });
         if (!keyChunk) return;
 
         const data = await this.dirFile.getChunkData(keyChunk);
         if (!data) return;
 
         const ds = new DataStream(data, this.dirFile.ds.endianness);
+
+        // Detect KEY* header size and Endianness
         let firstWord = ds.readUint16();
 
-        if (firstWord === KeyTableValues.EndianMismatch) {
+        // Auto-detect endianness mismatch for KEY* chunk
+        if (firstWord === KeyTableValues.EndianMismatch || firstWord > 255) {
             ds.endianness = ds.endianness === 'big' ? 'little' : 'big';
             ds.seek(0);
             firstWord = ds.readUint16();
         }
 
-        const headerSize = (firstWord === KeyTableValues.HeaderShort) ? 12 : 20;
-        ds.seek(headerSize === 12 ? 8 : 16);
-        const usedCount = ds.readUint32();
-        ds.seek(headerSize);
+        let headerSize = KeyTableValues.HeaderStandard;
+        let usedCount;
 
+        if (firstWord === KeyTableValues.HeaderShort) {
+            headerSize = KeyTableValues.HeaderShort;
+            ds.readUint16(); // skip second 12
+            ds.readUint32(); // entryCount placeholder
+            usedCount = ds.readUint32();
+        } else {
+            // Standard 20-byte header (e.g. Director 8+)
+            ds.seek(12);
+            ds.readUint32(); // entryCount placeholder
+            usedCount = ds.readUint32();
+        }
+
+        ds.seek(headerSize);
         for (let i = 0; i < usedCount; i++) {
             if (ds.position + 12 > data.length) break;
             const sectionID = ds.readInt32();
@@ -174,13 +298,67 @@ class DirectorExtractor {
             this.keyTable[castID][tag] = sectionID;
             this.resToMember[sectionID] = castID;
         }
+
+        // Parse LctX (ScriptContextChunk) properly to finding script mappings
+        const lctxMap = {}; // ScriptID -> Lscr Chunk ID
+        const lctxChunks = this.dirFile.chunks.filter(c => {
+            const unprot = DirectorFile.unprotect(c.type).toUpperCase();
+            return unprot === Magic.LCTX.toUpperCase() || unprot === AfterburnerTags.XtcL.toUpperCase();
+        });
+
+        for (const chunk of lctxChunks) {
+            const data = await this.dirFile.getChunkData(chunk);
+            if (!data || data.length < 18) continue;
+
+            const ds = new DataStream(data, 'big');
+            ds.skip(8); // unk0, unk1
+            const entryCount = ds.readUint32();
+            ds.readUint32(); // entryCount2
+            const entriesOffset = ds.readUint16();
+
+            if (entriesOffset < data.length) {
+                ds.seek(entriesOffset);
+                for (let i = 1; i <= entryCount; i++) {
+                    if (ds.position + 12 > data.length) break;
+                    ds.readInt32(); // unk0
+                    const sectionId = ds.readInt32();
+                    ds.readUint16(); // unk1
+                    ds.readUint16(); // unk2
+
+                    if (sectionId > -1) {
+                        lctxMap[i] = sectionId;
+                    }
+                }
+            }
+        }
+        this.lctxMap = lctxMap;
     }
 
     async parseNameTable() {
-        const lnam = this.dirFile.chunks.find(c => c.type === Magic.LNAM || c.type === 'manL');
+        const lnam = this.dirFile.chunks.find(c => c.type === Magic.LNAM || c.type === AfterburnerTags.manL);
         if (lnam) {
             const data = await this.dirFile.getChunkData(lnam);
             if (data) this.nameTable = this.lnamParser.parse(data);
+        }
+    }
+
+    async parseLctxMap() {
+        const lctxChunks = this.dirFile.chunks.filter(c => {
+            const unprot = DirectorFile.unprotect(c.type).toUpperCase();
+            return unprot === Magic.LCTX.toUpperCase() || unprot === AfterburnerTags.XtcL.toUpperCase();
+        });
+
+        for (const chunk of lctxChunks) {
+            const data = await this.dirFile.getChunkData(chunk);
+            if (!data || data.length < 8) continue;
+
+            const ds = new DataStream(data, this.dirFile.ds.endianness);
+            ds.skip(8); // Skip header
+
+            const scriptId = this.resToMember[chunk.id];
+            if (scriptId) {
+                this.lctxMap[scriptId] = chunk.id;
+            }
         }
     }
 
@@ -235,7 +413,7 @@ class DirectorExtractor {
     }
 
     async processBitmap(member, map) {
-        const bitdId = map[Magic.BITD] || map['DIB '] || map['DIB*'] || map['bitd'] || map['dib '] || map['dib*'];
+        const bitdId = map[Magic.BITD] || map[AfterburnerTags['DIB ']] || map[AfterburnerTags['DIB*']] || map[Magic.BITD.toLowerCase()] || map[AfterburnerTags['DIB '].toLowerCase()] || map[AfterburnerTags['DIB*'].toLowerCase()];
         if (!bitdId) return;
 
         let alphaBuf = null;
@@ -253,23 +431,27 @@ class DirectorExtractor {
             else if (member.paletteId === -1) palette = Color.getWindowsSystem();
             else if (member.paletteId > 0) {
                 // Resolved from global shared palettes or internal CLUTs
-                const shared = this.sharedPalettes[member.paletteId];
-                if (shared) palette = shared;
-                else if (this.members.find(m => m.id === member.paletteId)?.palette) {
-                    palette = this.members.find(m => m.id === member.paletteId).palette;
+                const shared = this.sharedPalettes[member.paletteId] || this.sharedPalettes[String(member.paletteId)];
+                if (shared) {
+                    palette = shared.colors || shared;
+                } else {
+                    const foundPal = this.members.find(m => m.id === member.paletteId && m.typeId === MemberType.Palette);
+                    if (foundPal?.palette) palette = foundPal.palette;
                 }
             }
         }
 
         const pixels = await this.dirFile.getChunkData(this.dirFile.getChunkById(bitdId));
         if (pixels) {
+            this.log('INFO', `Extracting Bitmap: ${member.name} (${member.width}x${member.height})`);
             const outPath = path.join(this.outputDir, `${member.name}.png`);
-            await this.bitmapExtractor.extract(pixels, outPath, member, palette, alphaBuf);
+            const res = await this.bitmapExtractor.extract(pixels, outPath, member, palette, alphaBuf);
+            if (res) member.image = path.basename(res.path);
         }
     }
 
     async processPalette(member, map) {
-        const id = map?.[Magic.CLUT] || map?.[Magic.CLUT.toLowerCase()] || map?.['clut'] || member.id;
+        const id = map?.[Magic.CLUT] || map?.[Magic.CLUT.toLowerCase()] || member.id;
         const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(id));
         if (data) {
             member.palette = Color.parseDirector(data);
@@ -279,7 +461,7 @@ class DirectorExtractor {
     }
 
     async processSound(member, map) {
-        const sndId = map[Magic.SND] || map[Magic.snd] || map['SND*'] || map['snd*'];
+        const sndId = map[Magic.SND] || map[Magic.SND.toLowerCase()] || map[AfterburnerTags['SND*']] || map[AfterburnerTags['SND*'].toLowerCase()];
         if (!sndId) return;
         const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(sndId));
         if (data) {
@@ -289,7 +471,7 @@ class DirectorExtractor {
     }
 
     async processFont(member, map) {
-        const fontId = map[Magic.VWFT] || map[Magic.FONT] || map['VWFT'] || map['FONT'] || map['vwft'] || map['font'];
+        const fontId = map[Magic.VWFT] || map[Magic.FONT] || map[Magic.VWFT.toUpperCase()] || map[Magic.FONT.toUpperCase()] || map[Magic.VWFT.toLowerCase()] || map[Magic.FONT.toLowerCase()];
         if (!fontId) return;
         const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(fontId));
         if (data) {
@@ -308,7 +490,7 @@ class DirectorExtractor {
     }
 
     async processXtra(member, map) {
-        const xtraId = map[Magic.XTRA] || map['xtra'] || map['XTRA'];
+        const xtraId = map[Magic.XTRA] || map[Magic.XTRA.toLowerCase()] || map[Magic.XTRA.toUpperCase()];
         if (!xtraId) return;
         const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(xtraId));
         if (data) {
@@ -317,20 +499,75 @@ class DirectorExtractor {
         }
     }
 
-    async handleScripts(member, map) {
-        const lscrId = map?.[Magic.LSCR] || map?.[Magic.LSCR.toLowerCase()] || map?.['rcsL'];
-        const lctxId = map?.[Magic.LCTX] || map?.[Magic.LCTX.toLowerCase()] || map?.['XtcL'];
+    async handleScripts(member, memberKey) {
+        if (!this.options.extractScript) return;
 
-        const lscrData = lscrId ? await this.dirFile.getChunkData(this.dirFile.getChunkById(lscrId)) : null;
-        const lctxData = lctxId ? await this.dirFile.getChunkData(this.dirFile.getChunkById(lctxId)) : null;
+        let text = member.scriptText;
+        let source = null;
 
-        if (lscrData) {
-            const decompiled = this.lingoDecompiler.decompile(lscrData, lctxData, this.nameTable);
-            if (decompiled && decompiled.text) {
-                const outPath = path.join(this.outputDir, `${member.name}.ls`);
-                fs.writeFileSync(outPath, decompiled.text);
-                member.scriptFile = `${member.name}.ls`;
-                if (decompiled.text.includes(LingoConfig.Labels.ProtectedScript)) this.stats.protectedScripts++;
+        const potentialKeys = [memberKey];
+        if (member.scriptId > 0 && this.keyTable[member.scriptId]) potentialKeys.push(this.keyTable[member.scriptId]);
+
+        if (!text) {
+            for (const key of potentialKeys) {
+                if (!key) continue;
+                // Only look for STXT/TEXT initially
+                const textId = key[Magic.STXT] || key[Magic.TEXT];
+                if (!textId) continue;
+
+                const chunk = this.dirFile.chunks.find(c => c.id === textId);
+                if (!chunk) continue;
+
+                const buf = await this.dirFile.getChunkData(chunk);
+                if (buf) {
+                    text = this.textExtractor.extract(buf);
+                    source = chunk.type;
+                    break;
+                }
+            }
+        }
+
+        if (text && text.trim()) {
+            this.log('DEBUG', `Member ${member.name}: Saving script from ${source} chunk source.`);
+            const isScript = member.typeId === MemberType.Script;
+            const extension = isScript ? '.ls' : '';
+            const outPath = path.join(this.outputDir, `${member.name}${extension}`);
+            this.scriptExtractor.save(text, outPath, member);
+            member.scriptFile = `${member.name}${extension}`;
+        } else {
+            // Priority 1: LctX Mapping (Deterministic)
+            let lscrId = 0;
+            if (member.id > 0 && this.lctxMap[member.id]) {
+                lscrId = this.lctxMap[member.id];
+                source = 'Lscr (LctX)';
+            }
+
+            // Priority 2: KeyTable (Resource Mapping)
+            if (!lscrId) {
+                for (const key of potentialKeys) {
+                    if (!key) continue;
+                    lscrId = key[Magic.LSCR] || key[AfterburnerTags.rcsL];
+                    if (lscrId) {
+                        source = 'Lscr (KeyTable)';
+                        break;
+                    }
+                }
+            }
+
+            if (lscrId) {
+                const chunk = this.dirFile.chunks.find(c => c.id === lscrId);
+                const lscrData = chunk ? await this.dirFile.getChunkData(chunk) : null;
+
+                if (lscrData) {
+                    this.log('INFO', `Member ID ${member.id}: Decompiling Bytecode from ${source}...`);
+                    const decompiled = this.lingoDecompiler.decompile(lscrData, this.nameTable);
+                    if (decompiled && decompiled.text) {
+                        const outPath = path.join(this.outputDir, `${member.name}.ls`);
+                        fs.writeFileSync(outPath, decompiled.text);
+                        member.scriptFile = `${member.name}.ls`;
+                        if (decompiled.text.includes(LingoConfig.Labels.ProtectedScript)) this.stats.protectedScripts++;
+                    }
+                }
             }
         }
     }
@@ -358,9 +595,12 @@ class DirectorExtractor {
         console.log(`${color}[${lvl}] ${msg}\x1b[0m`);
     }
 
-    saveResults() {
+    saveJSON() {
         fs.writeFileSync(path.join(this.outputDir, 'members.json'), JSON.stringify(this.metadata, null, 2));
-        const logContent = this.extractionLog.map(e => `[${e.lvl.padEnd(5)}] ${e.msg}`).join('\n');
+    }
+
+    saveLog() {
+        const logContent = this.extractionLog.map(e => `[${e.timestamp}] ${e.lvl.padEnd(5)} ${e.msg}`).join('\n');
         fs.writeFileSync(path.join(this.outputDir, 'extraction.log'), logContent);
     }
 }

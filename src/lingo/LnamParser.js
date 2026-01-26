@@ -1,5 +1,5 @@
 /**
- * @version 1.1.1
+ * @version 1.1.2
  * LnamParser.js - Symbol table parser for Adobe Director Lingo
  * 
  * Extracts the name table (Lnam) which contains identifiers for variables, 

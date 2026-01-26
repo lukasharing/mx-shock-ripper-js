@@ -1,5 +1,5 @@
 /**
- * @version 1.1.1
+ * @version 1.1.2
  * BitmapExtractor.js - Deterministic reconstruction of Director BITD assets
  * 
  * Implements sophisticated pixel recovery for multiple bit depths (1, 2, 4, 8, 16, 24, 32).

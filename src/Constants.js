@@ -1,5 +1,5 @@
 /**
- * @version 1.1.1
+ * @version 1.1.2
  * Constants.js - Centralized export hub for all technical constants
  */
 
@@ -15,6 +15,7 @@ const Font = require('./constants/Font');
 const Resources = require('./constants/Resources');
 const LingoConfig = require('./constants/lingo/Config');
 const LingoOpcode = require('./constants/lingo/Opcode');
+const Offsets = require('./constants/Offsets');
 
 module.exports = {
     MemberType,
@@ -28,5 +29,6 @@ module.exports = {
     Font,
     Resources,
     LingoConfig,
-    LingoOpcode
+    LingoOpcode,
+    Offsets
 };

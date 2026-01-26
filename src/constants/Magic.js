@@ -1,5 +1,5 @@
 /**
- * @version 1.1.1
+ * @version 1.1.2
  * Magic.js - FourCC identifiers and Magic numbers for Director chunks
  */
 
@@ -24,5 +24,18 @@ module.exports = {
     TEXT: 'TEXT', // Text Member Content
     ALFA: 'ALFA', // Alpha Mask
     SHAP: 'SHAP', // Shape Data
-    XTRA: 'XTRA'  // Xtra Data
+    XTRA: 'XTRA', // Xtra Data
+    CAST_SPACE: 'CAS ',
+    KEY_SPACE: 'KEY ',
+    MV93: 'MV93', // Movie (Dir 4+)
+    MVPV: 'MVPV', // Movie (Afterburner)
+    MC93: 'MC93', // Cast (Dir 4+)
+    MCsL: 'MCsL', // Movie Cast Script List
+    Lscl: 'Lscl', // Protected Cast List
+    VWCF: 'VWCF', // Vector Config
+    conf: 'conf', // Config
+    VWky: 'VWky', // Memory Map Key
+    DRCF: 'DRCF', // Config (Dir 5+)
+    SCORE: 'Score', // Score/Timeline
+    VWSC: 'VWSC'  // Score (Dir 4+)
 };

@@ -1,5 +1,5 @@
 /**
- * @version 1.1.1
+ * @version 1.1.2
  * ProjectExtractor.js - Strategic orchestrator for multi-movie Director projects
  * 
  * Handles the recursive discovery of linked cast libraries (.cct/.cst) and 

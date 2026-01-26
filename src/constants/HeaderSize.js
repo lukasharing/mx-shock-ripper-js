@@ -1,5 +1,5 @@
 /**
- * @version 1.1.1
+ * @version 1.1.2
  * HeaderSize.js - Byte lengths for various chunk/asset headers
  */
 

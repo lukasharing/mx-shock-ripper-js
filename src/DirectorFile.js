@@ -1,5 +1,5 @@
 /**
- * @version 1.1.1
+ * @version 1.1.2
  * DirectorFile.js - Core binary parser for Adobe Director project archives
  * 
  * This class handles the low-level parsing of RIFX (Mac), XFIR (Windows), 
@@ -65,7 +65,7 @@ class DirectorFile {
             this.subtype = this.ds.readFourCC();
 
             // Detect hidden Afterburner subtypes
-            if (['FGDC', 'CDGF', 'FGDM', 'MDGF'].includes(this.subtype)) {
+            if ([Magic.FGDC, 'CDGF', 'FGDM', 'MDGF'].includes(this.subtype)) {
                 this.isAfterburned = true;
                 this.format = 'afterburner';
                 await this.calculateAfterburnedStructure();
@@ -124,13 +124,13 @@ class DirectorFile {
      */
     async calculateAfterburnedStructure() {
         // 1. File Version (Fver)
-        if (this._peekUnprotected().toUpperCase() === 'FVER') {
+        if (this._peekUnprotected().toUpperCase() === AfterburnerTags.Fver.toUpperCase()) {
             this.ds.readFourCC();
             this.ds.skip(this.ds.readVarInt());
         }
 
         // 2. Logical Mapping (Fmap)
-        if (this._peekUnprotected().toUpperCase() === 'FMAP') {
+        if (this._peekUnprotected().toUpperCase() === AfterburnerTags.Fmap.toUpperCase()) {
             this.ds.readFourCC();
             const fmapEnd = this.ds.position + this.ds.readVarInt();
             this.fmap = {};
@@ -142,7 +142,7 @@ class DirectorFile {
         }
 
         // 3. File Catalog (Fcdr)
-        if (this._peekUnprotected().toUpperCase() === 'FCDR') {
+        if (this._peekUnprotected().toUpperCase() === AfterburnerTags.Fcdr.toUpperCase()) {
             this.ds.readFourCC();
             const fcdrLen = this.ds.readVarInt();
             const fcdrDecomp = zlib.inflateSync(this.ds.readBytes(fcdrLen));
@@ -152,10 +152,11 @@ class DirectorFile {
 
         // 4. Asset Allocation (Abmp)
         const tag = this._peekUnprotected();
-        if (['ABMP', 'PMBA'].includes(tag.toUpperCase())) {
+        if ([AfterburnerTags.Abmp.toUpperCase(), AfterburnerTags.PMBA.toUpperCase()].includes(tag.toUpperCase())) {
             this.ds.readFourCC();
             const abmpEnd = this.ds.position + this.ds.readVarInt();
             this.ds.readVarInt(); // skip uncompressed size
+            this.ds.readVarInt(); // skip second header field
             const abmpDecomp = zlib.inflateSync(this.ds.readBytes(abmpEnd - this.ds.position));
             const abmpDS = new DataStream(abmpDecomp, this.ds.endianness);
             abmpDS.readVarInt(); // skip unk1
@@ -165,7 +166,7 @@ class DirectorFile {
         }
 
         // 5. Inline Stream (FGEI)
-        if (['FGEI', 'IEGF'].includes(this._peekUnprotected().toUpperCase())) {
+        if ([AfterburnerTags.FGEI.toUpperCase(), AfterburnerTags.IEGF.toUpperCase()].includes(this._peekUnprotected().toUpperCase())) {
             this.ds.readFourCC();
             this.ds.readVarInt();
             this.ilsBodyOffset = this.ds.position;
