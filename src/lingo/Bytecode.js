@@ -6,26 +6,8 @@
  * based on the Adobe Director 4.x - MX bytecode specifications.
  */
 
-const { LingoConfig } = require('../Constants');
-
-// Internal Opcode Maps
-const ONE_BYTE_CODES = {
-    0x00: "return", 0x01: "push_zero", 0x02: "push_one", 0x03: "push_minus_one",
-    0x04: "add", 0x05: "sub", 0x06: "mul", 0x07: "div", 0x08: "mod", 0x09: "inv",
-    0x0a: "join", 0x0b: "join_space", 0x0c: "less", 0x0d: "less_eq", 0x0e: "not_eq",
-    0x0f: "eq", 0x10: "greater", 0x11: "greater_eq", 0x12: "and", 0x13: "or", 0x14: "not",
-    0x15: "contains", 0x16: "starts_with", 0x17: "chunk_to_item", 0x18: "chunk_to_line",
-    0x19: "exit_repeat", 0x1a: "next_repeat", 0x1e: "push_void", 0x1f: "push_empty_string"
-};
-
-const MULTI_BYTE_CODES = {
-    0x01: "push_int8", 0x02: "push_int16", 0x03: "push_int32", 0x04: "push_float",
-    0x05: "push_symbol", 0x06: "push_literal", 0x09: "push_handler", 0x0b: "push_global_prop",
-    0x0c: "push_movie_prop", 0x0d: "push_prop", 0x0e: "push_global", 0x0f: "push_param",
-    0x10: "push_local", 0x11: "pop_global_prop", 0x12: "pop_movie_prop", 0x13: "pop_prop",
-    0x14: "pop_global", 0x15: "pop_param", 0x16: "pop_local", 0x17: "jump", 0x18: "jump_if_false",
-    0x1b: "call_local", 0x1c: "call_external", 0x1d: "call_object", 0x20: "get_prop_local"
-};
+const { LingoConfig, LingoOpcode } = require('../Constants');
+const { ONE_BYTE_CODES, MULTI_BYTE_CODES } = LingoOpcode;
 
 class Bytecode {
     /**
@@ -42,9 +24,20 @@ class Bytecode {
             let obj = 0, objLen = 0;
 
             if (op >= LingoConfig.OP_SHIFT_THRESHOLD) {
-                if (op >= 0xC0) { obj = buffer.readInt32BE(p); objLen = 4; p += 4; }
-                else if (op >= 0x80) { obj = buffer.readInt16BE(p); objLen = 2; p += 2; }
-                else { obj = buffer[p++]; objLen = 1; }
+                // Determine object size and signedness
+                if (op >= 0xC0) {
+                    obj = (op === 0xEF) ? buffer.readInt32BE(p) : buffer.readUInt32BE(p);
+                    objLen = 4; p += 4;
+                } else if (op >= 0x80) {
+                    // Some 3-byte ops are signed (jumps, etc)
+                    const subOp = op % LingoConfig.OP_SHIFT_THRESHOLD;
+                    obj = [0x13, 0x14, 0x15, 0x2e].includes(subOp) ? buffer.readInt16BE(p) : buffer.readUInt16BE(p);
+                    objLen = 2; p += 2;
+                } else {
+                    const subOp = op % LingoConfig.OP_SHIFT_THRESHOLD;
+                    obj = [0x13, 0x14, 0x15].includes(subOp) ? buffer.readInt8(p) : buffer[p];
+                    objLen = 1; p++;
+                }
             }
 
             results.push(new Bytecode(op, obj, objLen, pos, literals, resolveName));
@@ -58,8 +51,8 @@ class Bytecode {
         this.pos = pos;
         this.len = 1 + objLength;
         this.opcode = this.getMnemonic(val);
-        this.literal = (this.opcode === "push_literal") ? literals[obj] : null;
-        this.resolvedName = (resolveName && ["push_prop", "pop_prop", "call_external"].includes(this.opcode)) ? resolveName(obj, 'prop') : null;
+        this.literal = (this.opcode === "pushcons") ? literals[obj] : null;
+        this.resolvedName = (resolveName && ["getprop", "setprop", "extcall", "objcall", "objcallv4"].includes(this.opcode)) ? resolveName(obj, 'prop') : null;
     }
 
     getMnemonic(val) {

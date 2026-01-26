@@ -6,12 +6,22 @@
 module.exports = {
     HeuristicName: "new",
     OP_SHIFT_THRESHOLD: 0x40,
-    VERSION_V4: 92,
+    V4_HLEN: 92,
     SPECIAL_IDS: {
-        TRACE_SCRIPT: 0x00,
-        PLAYER: 0x01,
-        MOVIE: 0x02,
-        EXT_CALL_MAGIC: 0xFFFF
+        TRACE_SCRIPT: 1117,
+        PLAYER: 988,
+        MOVIE: 1118,
+        TYPE: 111,
+        EXT_CALL_MAGIC: 26
+    },
+    V4_SPRITE_PROPS: {
+        0x01: 'spriteNum',
+        0x06: 'member',
+        0x07: 'visible',
+        0x08: 'locZ',
+        0x09: 'blend',
+        0x0f: 'loc',
+        0x15: 'rect'
     },
     SCRIPT_TYPE: {
         SCORE: 1,
