@@ -3,7 +3,7 @@ const GenericExtractor = require('./GenericExtractor');
 const { Resources: { FileExtensions }, Sound: { Signatures: SoundSignatures } } = require('../Constants');
 
 /**
- * @version 1.1.5
+ * @version 1.1.6
  * SoundExtractor - Handles extraction and conversion of Director 
  * sound (SND) assets.
  * 

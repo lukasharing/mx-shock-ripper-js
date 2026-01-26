@@ -1,5 +1,5 @@
 /**
- * @version 1.1.5
+ * @version 1.1.6
  * KeyTable.js - Calibration constants for the Director Key Table (KEY*)
  */
 

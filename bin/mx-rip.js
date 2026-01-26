@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @version 1.1.5
+ * @version 1.1.6
  * mx-rip.js - Command-line interface for mx-shock-ripper-js
  * 
  * Provides a standardized CLI for extracting assets from .dcr, .cct, and .dir files. 

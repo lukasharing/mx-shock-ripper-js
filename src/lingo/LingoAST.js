@@ -1,5 +1,5 @@
 /**
- * @version 1.1.5
+ * @version 1.1.6
  * LingoAST.js
  * 
  * Abstract Syntax Tree (AST) nodes used to represent Lingo source code 
@@ -8,7 +8,7 @@
  * See docs/doc/08_LingoAST.md for technical details.
  */
 
-const Constants = require('./Constants');
+const { LingoConfig } = require('../Constants');
 
 /**
  * Base Node class for all AST elements
@@ -174,7 +174,7 @@ class CallStatement extends Node {
     toString(indent = "") {
         const argStr = (this.args instanceof ArgListLiteral) ? this.args.value.map(v => v.toString()).join(", ") : this.args?.toString();
         // Lingo commands like 'put' or 'alert' don't require parentheses
-        const needsParens = !Constants.COMMANDS_WITHOUT_PARENS.includes(this.name);
+        const needsParens = !LingoConfig.COMMANDS_WITHOUT_PARENS.includes(this.name);
         return `${indent}${this.name}${needsParens ? "(" : " "}${argStr}${needsParens ? ")" : ""}`;
     }
 }

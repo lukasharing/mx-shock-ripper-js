@@ -1,5 +1,5 @@
 /**
- * @version 1.1.5
+ * @version 1.1.6
  * Bitmap.js - Attribute flags and masks for Director Bitmap members
  */
 
