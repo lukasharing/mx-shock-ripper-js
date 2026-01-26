@@ -1,5 +1,5 @@
 /**
- * @version 1.1.3
+ * @version 1.1.4
  * Limits.js - Safety thresholds for memory and resource allocation
  */
 

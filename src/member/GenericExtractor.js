@@ -1,5 +1,5 @@
 /**
- * @version 1.1.3
+ * @version 1.1.4
  * GenericExtractor.js - Root class for Director member extraction
  * 
  * Provides standardized file persistence and logging capabilities utilized 

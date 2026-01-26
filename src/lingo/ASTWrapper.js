@@ -1,5 +1,5 @@
 /**
- * @version 1.1.3
+ * @version 1.1.4
  * ASTWrapper.js - Orchestrator for hierarchical AST construction
  * 
  * Manages the "Active Block" stack during decompilation to ensure nested control 

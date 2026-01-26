@@ -1,5 +1,5 @@
 /**
- * @version 1.1.3
+ * @version 1.1.4
  * DirectorFile.js - Core binary parser for Adobe Director project archives
  * 
  * This class handles the low-level parsing of RIFX (Mac), XFIR (Windows), 
@@ -145,7 +145,7 @@ class DirectorFile {
         if (this._peekUnprotected().toUpperCase() === AfterburnerTags.Fcdr.toUpperCase()) {
             this.ds.readFourCC();
             const fcdrLen = this.ds.readVarInt();
-            const fcdrDecomp = zlib.inflateSync(this.ds.readBytes(fcdrLen));
+            const fcdrDecomp = this._safeDecompress(this.ds.readBytes(fcdrLen));
             const fcdrDS = new DataStream(fcdrDecomp, this.ds.endianness);
             fcdrDS.skip(fcdrDS.readUint16() * 16);
         }
@@ -157,7 +157,7 @@ class DirectorFile {
             const abmpEnd = this.ds.position + this.ds.readVarInt();
             this.ds.readVarInt(); // skip uncompressed size
             this.ds.readVarInt(); // skip second header field
-            const abmpDecomp = zlib.inflateSync(this.ds.readBytes(abmpEnd - this.ds.position));
+            const abmpDecomp = this._safeDecompress(this.ds.readBytes(abmpEnd - this.ds.position));
             const abmpDS = new DataStream(abmpDecomp, this.ds.endianness);
             abmpDS.readVarInt(); // skip unk1
             abmpDS.readVarInt(); // skip unk2
@@ -198,7 +198,7 @@ class DirectorFile {
 
     async loadInlineStream(ilsInfo) {
         try {
-            const stream = zlib.inflateSync(this.ds.readBytes(ilsInfo.len));
+            const stream = this._safeDecompress(this.ds.readBytes(ilsInfo.len));
             const ilsDS = new DataStream(stream, this.ds.endianness);
             while (ilsDS.position < ilsDS.buffer.length) {
                 const resId = ilsDS.readVarInt();
