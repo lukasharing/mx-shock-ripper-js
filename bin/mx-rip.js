@@ -13,7 +13,7 @@ const { DCRExtractor, CCTExtractor } = require('../index');
 
 function showHelp() {
     process.stdout.write(`
-mx-shock-ripper-js - Production Grade Director Asset Ripper v1.1.4
+mx-shock-ripper-js - Production Grade Director Asset Ripper v1.1.5
 
 Usage:
   mx-rip <input_file> [output_dir] [options]

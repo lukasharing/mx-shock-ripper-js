@@ -15,13 +15,23 @@ module.exports = {
         EXT_CALL_MAGIC: 26
     },
     V4_SPRITE_PROPS: {
+        0x00: 'type',
         0x01: 'spriteNum',
+        0x02: 'foreColor',
+        0x03: 'backColor',
+        0x04: 'startFrame',
+        0x05: 'endFrame',
         0x06: 'member',
         0x07: 'visible',
-        0x08: 'locZ',
+        0x08: 'ink',
         0x09: 'blend',
+        0x0a: 'script',
+        0x0b: 'scriptNum',
         0x0f: 'loc',
-        0x15: 'rect'
+        0x10: 'scoreColor',
+        0x15: 'rect',
+        0x16: 'width',
+        0x17: 'height'
     },
     SCRIPT_TYPE: {
         SCORE: 1,
@@ -41,5 +51,10 @@ module.exports = {
     COMMANDS_WITHOUT_PARENS: ['put', 'alert', 'set', 'go'],
     Labels: {
         ProtectedScript: "[Protected Script]"
+    },
+    OP_SPEC: {
+        PUSHVAR: 0x01,
+        MOVIEPROP: 0x1f,
+        GETTOPLEVELPROP: 0x32
     }
 };

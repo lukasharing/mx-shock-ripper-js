@@ -4,15 +4,10 @@ const GenericExtractor = require('./GenericExtractor');
 const { Resources: { Labels } } = require('../Constants');
 
 /**
+ * @version 1.1.5
  * PaletteExtractor - Handles parsing and formatting of Director palette (CLUT) assets.
  * 
- * STRUCTURE:
- * - CLUT Chunks: Contain a series of 6-byte RGB entries.
- * - RGB Format: Each color is stored as three 16-bit integers (R, G, B), 
- *   though typically only the upper 8 bits are used for standard 24-bit color depth.
- * 
- * FORMATTING:
- * - JASC-PAL: Exported as a standard PaintShop Pro palette format for compatibility with external tools.
+ * See docs/doc/09_PaletteExtraction.md for technical details.
  */
 class PaletteExtractor extends GenericExtractor {
     constructor(logger) {
@@ -20,48 +15,62 @@ class PaletteExtractor extends GenericExtractor {
     }
 
     /**
-     * Parse palette binary data into an array of [R, G, B]
+     * Parse palette binary data into an array of [R, G, B] using multi-strategy detection.
      */
     parse(paletteBuf, endianness) {
         if (!paletteBuf || paletteBuf.length === 0) return [];
+
+        let palette = this._parse16BitColors(paletteBuf, endianness);
+        if (palette.length > 0) return palette;
+
+        palette = this._parse8BitColors(paletteBuf);
+        if (palette.length > 0) return palette;
+
+        palette = this._parseExtendedColors(paletteBuf);
+        return palette;
+    }
+
+    /**
+     * Strategy 1: Legacy 6-byte format (16-bit channels)
+     */
+    _parse16BitColors(buffer, endianness) {
+        if (buffer.length < 768 * 2) return [];
         const palette = [];
-
-        // Strategy 1: Legacy 6-byte format (16-bit channels)
-        if (paletteBuf.length >= 768 * 2) {
-            const pds = new DataStream(paletteBuf, endianness);
-            const palTotal = Math.floor(paletteBuf.length / 6);
-            for (let i = 0; i < palTotal; i++) {
-                if (palette.length >= 256) break;
-                const r = pds.readUint16() >> 8;
-                const g = pds.readUint16() >> 8;
-                const b = pds.readUint16() >> 8;
-                palette.push([r, g, b]);
-            }
-            return palette;
+        const pds = new DataStream(buffer, endianness);
+        const palTotal = Math.floor(buffer.length / 6);
+        for (let i = 0; i < palTotal; i++) {
+            if (palette.length >= 256) break;
+            palette.push([pds.readUint16() >> 8, pds.readUint16() >> 8, pds.readUint16() >> 8]);
         }
+        return palette;
+    }
 
-        // Strategy 2: 3-byte RGB format
+    /**
+     * Strategy 2: 3-byte RGB format
+     */
+    _parse8BitColors(buffer) {
+        if (buffer.length < 768) return [];
+        const palette = [];
         let offset = 0;
-        if (paletteBuf.length === 768) offset = 0;
-        else if (paletteBuf.length > 768 && (paletteBuf.length - 768) < 20) offset = paletteBuf.length - 768;
-
-        if (paletteBuf.length >= 768) {
-            for (let i = offset; i < paletteBuf.length; i += 3) {
-                if (palette.length >= 256 || i + 3 > paletteBuf.length) break;
-                palette.push([paletteBuf[i], paletteBuf[i + 1], paletteBuf[i + 2]]);
-            }
+        if (buffer.length > 768 && (buffer.length - 768) < 20) offset = buffer.length - 768;
+        for (let i = offset; i < buffer.length; i += 3) {
+            if (palette.length >= 256 || i + 3 > buffer.length) break;
+            palette.push([buffer[i], buffer[i + 1], buffer[i + 2]]);
         }
+        return palette;
+    }
 
-        // Strategy 3: 4-byte RGBA/RGBX format fallback
-        if (palette.length < 255 && paletteBuf.length >= 1024) {
-            palette.length = 0;
-            offset = paletteBuf.length === 1024 ? 0 : (paletteBuf.length - 1024);
-            for (let i = offset; i < paletteBuf.length; i += 4) {
-                if (palette.length >= 256 || i + 4 > paletteBuf.length) break;
-                palette.push([paletteBuf[i], paletteBuf[i + 1], paletteBuf[i + 2]]);
-            }
+    /**
+     * Strategy 3: 4-byte RGBA/RGBX format fallback
+     */
+    _parseExtendedColors(buffer) {
+        if (buffer.length < 1024) return [];
+        const palette = [];
+        const offset = buffer.length === 1024 ? 0 : (buffer.length - 1024);
+        for (let i = offset; i < buffer.length; i += 4) {
+            if (palette.length >= 256 || i + 4 > buffer.length) break;
+            palette.push([buffer[i], buffer[i + 1], buffer[i + 2]]);
         }
-
         return palette;
     }
 
@@ -83,9 +92,7 @@ class PaletteExtractor extends GenericExtractor {
     save(palette, outputPath, member) {
         const content = this.formatJasc(palette);
         const res = this.saveFile(content, outputPath, "Palette");
-        if (res && member) {
-            member.paletteFile = res.file;
-        }
+        if (res && member) member.paletteFile = res.file;
         return res;
     }
 }

@@ -1,16 +1,15 @@
 /**
  * @version 1.1.5
- * LnamParser.js - Symbol table parser for Adobe Director Lingo
+ * LnamParser.js
  * 
- * Extracts the name table (Lnam) which contains identifiers for variables, 
- * handlers, and properties. Supports Pascal-string extraction from big-endian payloads.
+ * Parses Lingo Name Table (Lnam) chunks into symbol arrays.
  */
 
 const DataStream = require('../utils/DataStream');
 
 class LnamParser {
     constructor(logger) {
-        this.log = logger || ((lvl, msg) => console.log(`[LnamParser][${lvl}] ${msg}`));
+        this.log = logger || console.log;
     }
 
     /**
@@ -20,31 +19,37 @@ class LnamParser {
      */
     parse(buffer) {
         try {
-            const ds = new DataStream(buffer, 'big');
+            // Lingo metadata is always big-endian.
+            const stream = new DataStream(buffer, 'big');
 
-            // Header Analysis
-            ds.skip(8); // Skip internal chunk linkage (8 bytes)
-            const expectedLen = ds.readUint32();
-            ds.skip(4); // Duplicate length or flags
-            const poolOffset = ds.readUint16();
-            const symbolCount = ds.readUint16();
+            // Header fields (some are unknown/reserved)
+            const unknown0 = stream.readInt32();
+            const unknown1 = stream.readInt32();
+            const chunkLen1 = stream.readUint32();
+            const chunkLen2 = stream.readUint32();
+            const namesOffset = stream.readUint16();
+            const nameCount = stream.readUint16();
 
-            ds.seek(poolOffset);
-            const symbols = [];
+            // Jump to the start of the string array
+            stream.seek(namesOffset);
+            const names = [];
 
-            for (let i = 0; i < symbolCount; i++) {
-                if (ds.position >= buffer.length) break;
-                const len = ds.readUint8();
-                if (len > 0 && ds.position + len <= buffer.length) {
-                    symbols.push(ds.readString(len));
+            for (let i = 0; i < nameCount; i++) {
+                // Each name is a Pascal string (Length Byte + Characters)
+                const nameLen = stream.readUint8();
+
+                if (nameLen > 0 && stream.position + nameLen <= buffer.length) {
+                    const name = stream.readString(nameLen);
+                    names.push(name);
                 } else {
-                    symbols.push('');
+                    // Empty entries are common in padded or corrupt tables
+                    names.push('');
                 }
             }
 
-            return symbols;
+            return names;
         } catch (e) {
-            this.log('ERROR', `Lnam extraction failed: ${e.message}`);
+            this.log('ERROR', `Lnam parsing failed: ${e.message}`);
             return [];
         }
     }

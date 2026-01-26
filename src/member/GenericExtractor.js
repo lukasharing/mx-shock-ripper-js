@@ -3,8 +3,7 @@
  * GenericExtractor.js - Root class for Director member extraction
  * 
  * Provides standardized file persistence and logging capabilities utilized 
- * by all specialized member extractors. Also serves as the fallback 
- * handler for unknown member types.
+ * by all specialized member extractors.
  */
 
 const fs = require('fs');

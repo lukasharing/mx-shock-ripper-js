@@ -1,5 +1,5 @@
 /**
- * @version 1.1.5
+ * @version 1.1.4
  * Resources.js - Display labels and file extension mapping
  */
 
@@ -29,6 +29,6 @@ module.exports = {
         Xtra: 'xtra'
     },
     Regex: {
-        FilenameSanitize: /[\/\\?%*:|"<>]/g
+        FilenameSanitize: /[\/\\?%*:|"<>\s]/g
     }
 };

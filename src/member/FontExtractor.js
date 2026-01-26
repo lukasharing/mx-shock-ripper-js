@@ -1,9 +1,7 @@
 /**
- * @version 1.1.5
  * FontExtractor.js - Extraction logic for Director VWFT/FONT assets
  * 
- * Preserves the proprietary binary structure of Director font members to ensure 
- * compatibility with original engines or specialized conversion tools.
+ * Preserves the proprietary binary structure of Director font members.
  */
 
 const GenericExtractor = require('./GenericExtractor');
