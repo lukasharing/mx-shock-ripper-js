@@ -21,8 +21,25 @@
     ],
     "author": "Lukas Haring",
     "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/lukasharing/mx-shock-ripper-js.git"
+    },
+    "bugs": {
+        "url": "https://github.com/lukasharing/mx-shock-ripper-js/issues"
+    },
+    "homepage": "https://github.com/lukasharing/mx-shock-ripper-js#readme",
+    "engines": {
+        "node": ">=16.0.0"
+    },
+    "files": [
+        "bin/",
+        "src/",
+        "index.js",
+        "README.md",
+        "LICENSE"
+    ],
     "dependencies": {
-        "pngjs": "^7.0.0",
-        "jpeg-js": "^0.4.4"
+        "pngjs": "^7.0.0"
     }
 }
