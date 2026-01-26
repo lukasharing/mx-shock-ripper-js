@@ -1,4 +1,4 @@
-/** @version 1.0.0 - Generic Director Asset Ripper */
+/** @version 1.1.0 - Generic Director Asset Ripper */
 const DataStream = require('../utils/DataStream');
 const GenericExtractor = require('./GenericExtractor');
 const { Resources: { Labels } } = require('../Constants');

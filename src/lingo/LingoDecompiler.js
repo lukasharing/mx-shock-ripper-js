@@ -1,5 +1,5 @@
 /**
- * @version 1.0.0
+ * @version 1.1.0
  * LingoDecompiler.js - Advanced Multi-Phase Lingo Decompiler
  * 
  * Implements a robust state-machine for transforming Director bytecode (Lscr) 

@@ -1,5 +1,5 @@
 /**
- * @version 1.0.0
+ * @version 1.1.0
  * SoundExtractor.js - Strategic extraction of Director audio assets
  * 
  * Supports SWA (Shockwave Audio/MP3) and raw PCM formats. Implements 

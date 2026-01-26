@@ -1,5 +1,5 @@
 /**
- * @version 1.0.0
+ * @version 1.1.0
  * TextExtractor.js - Extraction logic for Director Text and Field members
  * 
  * Handles modern Shockwave STXT headers (12-byte) and classic TEXT chunks. 

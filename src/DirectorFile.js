@@ -1,5 +1,5 @@
 /**
- * @version 1.0.0
+ * @version 1.1.0
  * DirectorFile.js - Core binary parser for Adobe Director project archives
  * 
  * This class handles the low-level parsing of RIFX (Mac), XFIR (Windows), 
