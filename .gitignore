@@ -1,0 +1,16 @@
+node_modules/
+dist/
+extractions/
+output/
+logs.txt
+fatal_error.log
+.DS_Store
+*.swp
+*.log
+coverage/
+.env
+.brain/
+temp/
+extractions/
+bin/*.bak
+src/**/*.bak

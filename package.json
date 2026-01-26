@@ -1,0 +1,28 @@
+{
+    "name": "mx-shock-ripper-js",
+    "version": "1.0.0",
+    "description": "A JavaScript tool to rip assets and strip Lingo code from Adobe Director MX 2004 (.dcr/.cct) files into JSON, PNG, WAV, PAL, etc.",
+    "main": "index.js",
+    "bin": {
+        "mx-rip": "bin/mx-rip.js"
+    },
+    "scripts": {
+        "start": "node bin/mx-rip.js"
+    },
+    "keywords": [
+        "director",
+        "adobe",
+        "shockwave",
+        "dcr",
+        "cct",
+        "rip",
+        "lingo",
+        "decompiler"
+    ],
+    "author": "Lukas Haring",
+    "license": "MIT",
+    "dependencies": {
+        "pngjs": "^7.0.0",
+        "jpeg-js": "^0.4.4"
+    }
+}
