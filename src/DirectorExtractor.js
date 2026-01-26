@@ -1,5 +1,5 @@
 /**
- * @version 1.1.4
+ * @version 1.1.5
  * DirectorExtractor.js - Strategic extraction orchestrator for Adobe Director assets
  * 
  * This class coordinates the high-level extraction workflow, managing 
@@ -224,18 +224,42 @@ class DirectorExtractor {
 
         const castList = [];
         let pos = 0;
+        // Robust scanner handling Name -> Path -> Gap structure.
         while (pos < data.length - 2) {
             const len = data.readUInt16BE(pos);
             if (len > 0 && len < 256 && (pos + 2 + len + 2) < data.length) {
-                const name = data.slice(pos + 2, pos + 2 + len).toString();
-                let p2 = pos + 2 + len;
-                if (p2 + 2 < data.length) {
-                    const len2 = data.readUInt16BE(p2);
-                    if (len2 >= 0 && len2 < 512) {
-                        const pathStr = data.slice(p2 + 2, p2 + 2 + len2).toString();
-                        castList.push({ name, path: pathStr });
-                        pos = p2 + 2 + len2 + 9;
-                        continue;
+                let valid = true;
+                for (let k = 0; k < len; k++) {
+                    const b = data[pos + 2 + k];
+                    if (b < 32 || b > 126) { valid = false; break; }
+                }
+
+                if (valid) {
+                    const name = data.slice(pos + 2, pos + 2 + len).toString();
+                    let p2 = pos + 2 + len;
+                    if (p2 + 2 < data.length) {
+                        const len2 = data.readUInt16BE(p2);
+                        if (len2 >= 0 && len2 < 512 && (p2 + 2 + len2 + 9) <= data.length) {
+                            let valid2 = true;
+                            if (len2 > 0) {
+                                for (let k = 0; k < len2; k++) {
+                                    const b = data[p2 + 2 + k];
+                                    if (b < 32 || b > 126) { valid2 = false; break; }
+                                }
+                            }
+
+                            if (valid2) {
+                                const pathStr = data.slice(p2 + 2, p2 + 2 + len2).toString();
+                                const gapStart = p2 + 2 + len2;
+                                const preloadMode = data.readUInt16BE(gapStart);
+
+                                if (name.length > 2 || pathStr.length > 2) {
+                                    castList.push({ name, path: pathStr, preloadMode });
+                                    pos = gapStart + 9;
+                                    continue;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -288,8 +312,7 @@ class DirectorExtractor {
         }
 
         ds.seek(headerSize);
-        for (let i = 0; i < usedCount; i++) {
-            if (ds.position + 12 > data.length) break;
+        while (ds.position + 12 <= data.length) {
             const sectionID = ds.readInt32();
             const castID = ds.readInt32();
             const tag = ds.readFourCC();

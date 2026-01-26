@@ -1,5 +1,5 @@
 /**
- * @version 1.1.4
+ * @version 1.1.5
  * DirectorFile.js - Core binary parser for Adobe Director project archives
  * 
  * This class handles the low-level parsing of RIFX (Mac), XFIR (Windows), 
@@ -61,7 +61,7 @@ class DirectorFile {
         if (this.isAfterburned) {
             await this.calculateAfterburnedStructure();
         } else {
-            this.ds.readUint32(); // skip size
+            const fileSize = this.ds.readUint32();
             this.subtype = this.ds.readFourCC();
 
             // Detect hidden Afterburner subtypes
@@ -80,7 +80,8 @@ class DirectorFile {
      */
     async parseUncompressedStructure() {
         let mmapOff = 0;
-        this.ds.seek(12);
+        this.ds.seek(0);
+        this.ds.skip(12);
 
         while (this.ds.position + 12 < this.ds.buffer.length) {
             const tag = this.ds.readFourCC();
@@ -103,7 +104,7 @@ class DirectorFile {
         this.ds.readFourCC(); // mmap
         this.ds.readUint32(); // len
         this.ds.skip(4);
-        this.ds.readInt32(); // maxChunks
+        const maxChunks = this.ds.readInt32(); // Added per Habbo alignment
         const usedChunks = this.ds.readInt32();
         this.ds.skip(12);
 
@@ -124,13 +125,13 @@ class DirectorFile {
      */
     async calculateAfterburnedStructure() {
         // 1. File Version (Fver)
-        if (this._peekUnprotected().toUpperCase() === AfterburnerTags.Fver.toUpperCase()) {
+        if (DirectorFile.unprotectTag(this.ds.peekFourCC()) === AfterburnerTags.Fver) {
             this.ds.readFourCC();
             this.ds.skip(this.ds.readVarInt());
         }
 
         // 2. Logical Mapping (Fmap)
-        if (this._peekUnprotected().toUpperCase() === AfterburnerTags.Fmap.toUpperCase()) {
+        if (DirectorFile.unprotectTag(this.ds.peekFourCC()) === AfterburnerTags.Fmap) {
             this.ds.readFourCC();
             const fmapEnd = this.ds.position + this.ds.readVarInt();
             this.fmap = {};
@@ -142,22 +143,23 @@ class DirectorFile {
         }
 
         // 3. File Catalog (Fcdr)
-        if (this._peekUnprotected().toUpperCase() === AfterburnerTags.Fcdr.toUpperCase()) {
+        if (DirectorFile.unprotectTag(this.ds.peekFourCC()) === AfterburnerTags.Fcdr) {
             this.ds.readFourCC();
             const fcdrLen = this.ds.readVarInt();
-            const fcdrDecomp = this._safeDecompress(this.ds.readBytes(fcdrLen));
+            const fcdrDecomp = zlib.inflateSync(this.ds.readBytes(fcdrLen));
             const fcdrDS = new DataStream(fcdrDecomp, this.ds.endianness);
             fcdrDS.skip(fcdrDS.readUint16() * 16);
         }
 
         // 4. Asset Allocation (Abmp)
-        const tag = this._peekUnprotected();
-        if ([AfterburnerTags.Abmp.toUpperCase(), AfterburnerTags.PMBA.toUpperCase()].includes(tag.toUpperCase())) {
+        const tag = DirectorFile.unprotectTag(this.ds.peekFourCC());
+        if ([AfterburnerTags.Abmp, 'ABMP', AfterburnerTags.PMBA].includes(tag)) {
             this.ds.readFourCC();
-            const abmpEnd = this.ds.position + this.ds.readVarInt();
+            const abmpLen = this.ds.readVarInt();
+            const abmpEnd = this.ds.position + abmpLen;
             this.ds.readVarInt(); // skip uncompressed size
             this.ds.readVarInt(); // skip second header field
-            const abmpDecomp = this._safeDecompress(this.ds.readBytes(abmpEnd - this.ds.position));
+            const abmpDecomp = zlib.inflateSync(this.ds.readBytes(abmpEnd - this.ds.position));
             const abmpDS = new DataStream(abmpDecomp, this.ds.endianness);
             abmpDS.readVarInt(); // skip unk1
             abmpDS.readVarInt(); // skip unk2
@@ -166,7 +168,8 @@ class DirectorFile {
         }
 
         // 5. Inline Stream (FGEI)
-        if ([AfterburnerTags.FGEI.toUpperCase(), AfterburnerTags.IEGF.toUpperCase()].includes(this._peekUnprotected().toUpperCase())) {
+        const nextTag = DirectorFile.unprotectTag(this.ds.peekFourCC());
+        if ([AfterburnerTags.FGEI, AfterburnerTags.IEGF].includes(nextTag)) {
             this.ds.readFourCC();
             this.ds.readVarInt();
             this.ilsBodyOffset = this.ds.position;
@@ -183,7 +186,7 @@ class DirectorFile {
             const uncompSize = ds.readVarInt();
             const compTypeIdx = ds.readVarInt();
             const rawTag = ds.readFourCC();
-            const chunkType = DirectorFile.unprotect(rawTag);
+            const chunkType = DirectorFile.unprotectTag(rawTag);
 
             this.chunks.push({
                 type: chunkType,
@@ -198,23 +201,18 @@ class DirectorFile {
 
     async loadInlineStream(ilsInfo) {
         try {
-            const stream = this._safeDecompress(this.ds.readBytes(ilsInfo.len));
-            const ilsDS = new DataStream(stream, this.ds.endianness);
+            const ilsDS = new DataStream(zlib.inflateSync(this.ds.readBytes(ilsInfo.len)), this.ds.endianness);
             while (ilsDS.position < ilsDS.buffer.length) {
                 const resId = ilsDS.readVarInt();
                 const info = this.chunks.find(c => c.id === resId);
                 if (info) {
-                    if (info.len > Limits.InternalStreamSafetyLimit) break;
+                    if (info.len > 10000000) break; // Safety limit
                     this.cachedViews[resId] = ilsDS.readBytes(info.len);
                 } else break;
             }
         } catch (e) {
             this.log('ERROR', `ILS recovery failed: ${e.message}`);
         }
-    }
-
-    _peekUnprotected() {
-        return DirectorFile.unprotect(this.ds.peekFourCC());
     }
 
     /**
@@ -229,7 +227,7 @@ class DirectorFile {
             if (this.isAfterburned) {
                 this.ds.seek(this.ilsBodyOffset + chunk.off);
                 const raw = this.ds.readBytes(chunk.len);
-                const isZlib = raw.length > 2 && raw[0] === 0x78 && [0x9C, 0xDA, 0x01, 0x5E].includes(raw[1]);
+                const isZlib = raw.length > 2 && raw[0] === 0x78 && (raw[1] === 0x9C || raw[1] === 0xDA || raw[1] === 0x01 || raw[1] === 0x5E);
 
                 if (chunk.compType === 1 || isZlib || (chunk.uncompLen > 0 && chunk.uncompLen > chunk.len)) {
                     data = this._safeDecompress(raw);
@@ -273,13 +271,26 @@ class DirectorFile {
     /**
      * Translates protected Afterburner tags back to their standard FourCC names.
      */
-    static unprotect(tag) {
-        if (!tag) return tag;
-        const upTag = tag.toUpperCase();
-        for (const key of Object.keys(AfterburnerTags)) {
-            if (key.toUpperCase() === upTag) return AfterburnerTags[key];
-        }
-        return tag;
+    static unprotectTag(tag) {
+        const tagMap = {
+            'pami': 'imap',   // Protected Initial Map
+            'pamm': 'mmap',   // Protected Memory Map
+            '*YEK': 'KEY*',   // Protected Key Table (byte-swapped)
+            'YEK*': 'KEY*',   // Protected Key Table
+            'Lscl': 'MCsL',   // Movie Cast Script List (protected)
+            'XtcL': 'LctX',   // Lingo Script Text/Context (protected)
+            'manL': 'Lnam',   // Lingo Name Table (protected)
+            'rcsL': 'Lscr',   // Lingo Compiled Script (protected)
+            'CAS*': 'CASt',   // Cast Member Data (protected)
+            'snd ': 'SND ',    // Sound Data (protected/lowercase)
+            'DIB ': 'BITD',    // Bitmap Data (Shockwave 32-bit)
+            'DIB*': 'BITD',    // Bitmap Data (Shockwave 32-bit alternate)
+            'ediM': 'medi',    // Media (Shockwave)
+            'SND ': 'snd ',    // Sound (Shockwave)
+            'muhT': 'Thum',    // Thumbnail (Shockwave)
+            'STG ': 'Grid'     // Grid (Shockwave)
+        };
+        return tagMap[tag] || tag;
     }
 }
 

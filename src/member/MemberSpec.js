@@ -1,5 +1,5 @@
 /**
- * @version 1.1.4
+ * @version 1.1.5
  * MemberSpec.js - Type-specific binary metadata parsers
  * 
  * Each class provides a static 'parse' method for a specific Cast Member type payload.
@@ -44,15 +44,26 @@ class BitmapSpec {
 class ShapeSpec {
     static parse(ds, len) {
         if (len < 22) return {};
+        const flags = ds.readUint16();
+        const rect = ds.readRect();
+        const shapeType = ds.readInt16();
+        const pattern = ds.readInt16();
+        const foreColor = ds.readUint16();
+        const backColor = ds.readUint16();
+        const lineSize = ds.readInt16();
+        const lineDir = ds.readInt16();
+
         return {
-            _castFlags: ds.readUint16(),
-            rect: ds.readRect(),
-            shapeType: ds.readInt16(),
-            pattern: ds.readInt16(),
-            foreColor: ds.readUint16(),
-            backColor: ds.readUint16(),
-            lineSize: ds.readInt16(),
-            lineDir: ds.readInt16()
+            rect,
+            width: rect.right - rect.left,
+            height: rect.bottom - rect.top,
+            shapeType,
+            pattern,
+            foreColor,
+            backColor,
+            lineSize,
+            lineDir,
+            _castFlags: flags
         };
     }
 }

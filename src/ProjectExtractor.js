@@ -1,5 +1,5 @@
 /**
- * @version 1.1.4
+ * @version 1.1.5
  * ProjectExtractor.js - Strategic orchestrator for multi-movie Director projects
  * 
  * Handles the recursive discovery of linked cast libraries (.cct/.cst) and 
@@ -57,7 +57,7 @@ class ProjectExtractor {
 
         if (isEntry) await this.discoverLinkedCasts(df);
 
-        const keyChunk = df.chunks.find(c => [Magic.KEY, 'KEY '].includes(c.type));
+        const keyChunk = df.chunks.find(c => [Magic.KEY, 'KEY ', Magic.KEYStar].includes(c.type));
         const memberMap = {};
 
         if (keyChunk) {
@@ -65,7 +65,7 @@ class ProjectExtractor {
             if (keyData) {
                 const ds = new DataStream(keyData, df.ds.endianness);
                 let firstWord = ds.readUint16();
-                if (firstWord === KeyTableValues.EndianMismatch) {
+                if (firstWord === KeyTableValues.EndianMismatch || firstWord > 255) {
                     ds.endianness = ds.endianness === 'big' ? 'little' : 'big';
                     ds.seek(0);
                     firstWord = ds.readUint16();
@@ -76,6 +76,7 @@ class ProjectExtractor {
                 ds.seek(headerSize);
 
                 for (let i = 0; i < usedCount; i++) {
+                    if (ds.position + 12 > keyData.length) break;
                     const sectionID = ds.readInt32();
                     const castID = ds.readInt32();
                     const tag = ds.readFourCC();
@@ -92,8 +93,9 @@ class ProjectExtractor {
                 if (clutChunk) {
                     const data = await df.getChunkData(clutChunk);
                     let name = `Palette_${castID}`;
-                    if (resources[Magic.CAST]) {
-                        const castChunk = df.chunks.find(c => c.id === resources[Magic.CAST]);
+                    const castResId = resources[Magic.CAST] || resources[Magic.CASStar];
+                    if (castResId) {
+                        const castChunk = df.chunks.find(c => c.id === castResId);
                         if (castChunk) {
                             try {
                                 const m = CastMember.fromChunk(castID, await df.getChunkData(castChunk), df.ds.endianness);
@@ -118,18 +120,28 @@ class ProjectExtractor {
 
         const data = await df.getChunkData(mcsl);
         const rawStrings = data.toString('utf8').replace(/[^\x20-\x7E]/g, '\0').split('\0').filter(s => s.length > 2);
+        const castList = [];
 
         for (const raw of rawStrings) {
             const str = raw.trim();
             if (['Internal', 'Primary'].includes(str) || str.toLowerCase().startsWith('empty')) continue;
 
-            const base = str.replace(/\.(cst|cct|dcr|dir)$/i, '');
-            let targetPath = null;
-            if (fs.existsSync(path.join(this.baseDir, base + '.cct'))) targetPath = path.join(this.baseDir, base + '.cct');
-            else if (fs.existsSync(path.join(this.baseDir, base + '.dcr'))) targetPath = path.join(this.baseDir, base + '.dcr');
+            let possibleFilename = null;
+            if (str.match(/\.(cst|cct|dcr|dir)$/i)) possibleFilename = path.basename(str);
+            else if (!str.includes(':') && !str.includes('\\') && !str.includes('/')) possibleFilename = str;
 
-            if (targetPath && !this.loadedCasts.some(c => c.path === targetPath)) {
-                await this.loadCast(targetPath);
+            if (possibleFilename) {
+                const base = possibleFilename.replace(/\.(cst|cct|dcr|dir)$/i, '');
+                if (base === 'Habbo') continue;
+
+                let targetPath = null;
+                if (fs.existsSync(path.join(this.baseDir, base + '.cct'))) targetPath = path.join(this.baseDir, base + '.cct');
+                else if (fs.existsSync(path.join(this.baseDir, base + '.dcr'))) targetPath = path.join(this.baseDir, base + '.dcr');
+
+                if (targetPath && !castList.includes(base) && !this.loadedCasts.some(c => c.path === targetPath)) {
+                    castList.push(base);
+                    await this.loadCast(targetPath);
+                }
             }
         }
     }

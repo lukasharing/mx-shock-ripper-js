@@ -1,4 +1,4 @@
-/** @version 1.1.4 - Generic Director Asset Ripper */
+/** @version 1.1.5 - Generic Director Asset Ripper */
 const DataStream = require('../utils/DataStream');
 const GenericExtractor = require('./GenericExtractor');
 const { Resources: { Labels } } = require('../Constants');
@@ -23,18 +23,45 @@ class PaletteExtractor extends GenericExtractor {
      * Parse palette binary data into an array of [R, G, B]
      */
     parse(paletteBuf, endianness) {
-        const pds = new DataStream(paletteBuf, endianness);
+        if (!paletteBuf || paletteBuf.length === 0) return [];
         const palette = [];
-        const palTotal = Math.floor(paletteBuf.length / 6);
 
-        for (let i = 0; i < palTotal; i++) {
-            // Palettes in Director use 16-bit values for R, G, B
-            // but effectively only the upper 8 bits are used for standard colors
-            const r = pds.readUint16() >> 8;
-            const g = pds.readUint16() >> 8;
-            const b = pds.readUint16() >> 8;
-            palette.push([r, g, b]);
+        // Strategy 1: Legacy 6-byte format (16-bit channels)
+        if (paletteBuf.length >= 768 * 2) {
+            const pds = new DataStream(paletteBuf, endianness);
+            const palTotal = Math.floor(paletteBuf.length / 6);
+            for (let i = 0; i < palTotal; i++) {
+                if (palette.length >= 256) break;
+                const r = pds.readUint16() >> 8;
+                const g = pds.readUint16() >> 8;
+                const b = pds.readUint16() >> 8;
+                palette.push([r, g, b]);
+            }
+            return palette;
         }
+
+        // Strategy 2: 3-byte RGB format
+        let offset = 0;
+        if (paletteBuf.length === 768) offset = 0;
+        else if (paletteBuf.length > 768 && (paletteBuf.length - 768) < 20) offset = paletteBuf.length - 768;
+
+        if (paletteBuf.length >= 768) {
+            for (let i = offset; i < paletteBuf.length; i += 3) {
+                if (palette.length >= 256 || i + 3 > paletteBuf.length) break;
+                palette.push([paletteBuf[i], paletteBuf[i + 1], paletteBuf[i + 2]]);
+            }
+        }
+
+        // Strategy 3: 4-byte RGBA/RGBX format fallback
+        if (palette.length < 255 && paletteBuf.length >= 1024) {
+            palette.length = 0;
+            offset = paletteBuf.length === 1024 ? 0 : (paletteBuf.length - 1024);
+            for (let i = offset; i < paletteBuf.length; i += 4) {
+                if (palette.length >= 256 || i + 4 > paletteBuf.length) break;
+                palette.push([paletteBuf[i], paletteBuf[i + 1], paletteBuf[i + 2]]);
+            }
+        }
+
         return palette;
     }
 

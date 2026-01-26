@@ -1,5 +1,5 @@
 /**
- * @version 1.1.4
+ * @version 1.1.5
  * MemberType.js - Direct identifiers for different Cast Member types
  */
 

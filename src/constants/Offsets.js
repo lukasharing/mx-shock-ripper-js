@@ -1,5 +1,5 @@
 /**
- * @version 1.1.4
+ * @version 1.1.5
  * Offsets.js - Binary structure offsets for Director chunks
  */
 
@@ -7,8 +7,10 @@ module.exports = {
     KeyTableStandard: 20,
     KeyTableShort: 12,
     DirConfig: {
-        DirectorVersion: 52,
-        FrameRate: 56,
-        Checksum: 68
+        DirectorVersion: 36,
+        FrameRate: 54,
+        Platform: 56,
+        Protection: 58,
+        Checksum: 64
     }
 };

@@ -1,5 +1,5 @@
 /**
- * @version 1.1.4
+ * @version 1.1.5
  * ShapeExtractor.js - Processing and SVG generation for Director Shape members
  * 
  * Transforms geometric shape metadata (Rect, Oval, Line) into modern SVG markup. 

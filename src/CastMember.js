@@ -1,5 +1,5 @@
 /**
- * @version 1.1.4
+ * @version 1.1.5
  * CastMember.js - Archetypal model for Adobe Director resources
  * 
  * This class encapsulates the dual-nature of Director resources: the standardized 
@@ -101,17 +101,17 @@ class CastMember {
 
         // Runtime Endianness Calibration
         if (typeId > 0xFFFF) {
-            ds.endianness = ds.endianness === 'big' ? 'little' : 'big';
-            ds.seek(0);
-            typeId = ds.readUint32();
-            infoLen = ds.readUint32();
-            specLen = ds.readUint32();
+            const swappedDS = new DataStream(buffer, preferredEndianness === 'big' ? 'little' : 'big');
+            typeId = swappedDS.readUint32();
+            infoLen = swappedDS.readUint32();
+            specLen = swappedDS.readUint32();
+            ds.endianness = swappedDS.endianness;
         }
 
         const props = { typeId, type: this.getTypeName(typeId), endianness: ds.endianness };
 
         if (infoLen > 0 && ds.position + infoLen <= buffer.length) {
-            Object.assign(props, this._parseCommonInfo(ds.readBytes(infoLen), ds.endianness));
+            Object.assign(props, this._parseCommonInfo(ds.readBytes(infoLen), ds.endianness, typeId));
         }
 
         if (specLen > 0 && ds.position + specLen <= buffer.length) {
@@ -124,25 +124,25 @@ class CastMember {
     /**
      * Parses the standardized common property block found in all members.
      */
-    static _parseCommonInfo(buffer, endianness) {
+    static _parseCommonInfo(buffer, endianness, typeId) {
         const ds = new DataStream(buffer, endianness);
         if (buffer.length < 20) return {};
 
-        const propertyTableOffset = ds.readUint32();
-        const linkedCastId = ds.readUint32(); // Reference to external cast source
-        const sequenceId = ds.readUint32();   // Order in origin sequence
+        const dataOffset = ds.readUint32();
+        const unk1 = ds.readUint32();
+        const unk2 = ds.readUint32();
         const flags = ds.readUint32();
         const scriptId = ds.readUint32();
 
-        const props = { flags, scriptId, linkedCastId, sequenceId };
+        const props = { flags, scriptId };
 
         if (buffer.length >= 28) {
             props.created = ds.readUint32();
             props.modified = ds.readUint32();
         }
 
-        if (propertyTableOffset > 0 && propertyTableOffset < buffer.length) {
-            Object.assign(props, this._parsePropertyTable(ds, propertyTableOffset, buffer.length));
+        if (dataOffset > 0 && dataOffset < buffer.length) {
+            Object.assign(props, this._parsePropertyTable(ds, dataOffset, buffer.length));
         }
 
         return props;
@@ -155,38 +155,38 @@ class CastMember {
         ds.seek(offset);
         if (ds.position + 2 > totalLen) return {};
 
-        const entryCount = ds.readUint16();
+        const tableLen = ds.readUint16();
         const offsets = [];
-        for (let i = 0; i < entryCount; i++) {
+        for (let i = 0; i < tableLen; i++) {
             if (ds.position + 4 > totalLen) break;
             offsets.push(ds.readUint32());
         }
 
         if (ds.position + 4 > totalLen) return {};
-        const stringPoolSize = ds.readUint32();
-        const poolBase = ds.position;
+        const itemsLen = ds.readUint32();
+        const base = ds.position;
 
-        const readStringAt = (idx) => {
+        const readItem = (idx) => {
             if (idx >= offsets.length) return null;
             const start = offsets[idx];
-            const end = (idx + 1 < offsets.length) ? offsets[idx + 1] : stringPoolSize;
-            if (start >= end || poolBase + end > totalLen) return null;
-            ds.seek(poolBase + start);
+            const end = (idx + 1 < offsets.length) ? offsets[idx + 1] : itemsLen;
+            if (start >= end || base + end > totalLen) return null;
+            ds.seek(base + start);
             return ds.readBytes(end - start);
         };
 
         const res = {};
-        const scriptData = readStringAt(0);
-        if (scriptData) res.scriptText = scriptData.toString('utf8');
+        const item0 = readItem(0);
+        if (item0) res.scriptText = item0.toString('utf8');
 
-        const nameData = readStringAt(1);
-        if (nameData && nameData.length > 0) {
-            const nameLen = nameData[0];
-            res.name = nameData.slice(1, 1 + nameLen).toString('utf8').trim();
+        const item1 = readItem(1);
+        if (item1 && item1.length > 0) {
+            const nameLen = item1[0];
+            res.name = item1.slice(1, 1 + nameLen).toString('utf8').trim();
         }
 
-        const commentData = readStringAt(4);
-        if (commentData) res.comment = commentData.toString('utf8').trim();
+        const item4 = readItem(4);
+        if (item4) res.comment = item4.toString('utf8').trim();
 
         return res;
     }

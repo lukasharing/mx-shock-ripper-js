@@ -1,5 +1,5 @@
 /**
- * @version 1.1.4
+ * @version 1.1.5
  * LingoAST.js - Abstract Syntax Tree nodes and Translation Engine for Adobe Director Lingo
  * 
  * Defines the structural building blocks for Lingo source code and implements the 
