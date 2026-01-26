@@ -1,5 +1,5 @@
 /**
- * @version 1.1.0
+ * @version 1.1.1
  * DirectorExtractor.js - Strategic extraction orchestrator for Adobe Director assets
  * 
  * This class coordinates the high-level extraction workflow, managing 
@@ -107,7 +107,8 @@ class DirectorExtractor {
         // Pass 1: Extract Member Metadata
         const processingQueue = [];
         for (const chunk of this.dirFile.chunks) {
-            if ([Magic.CAST, 'CAS*'].includes(chunk.type)) {
+            const upType = chunk.type.toUpperCase();
+            if (['CAST', 'CAS*', 'CAS '].includes(upType)) {
                 try {
                     const member = await this.parseMemberMetadata(chunk);
                     if (member) processingQueue.push({ member, chunk });
@@ -143,7 +144,7 @@ class DirectorExtractor {
      * Maps physical chunk IDs to logical member IDs using the KEY table.
      */
     async parseKeyTable() {
-        const keyChunk = this.dirFile.chunks.find(c => [Magic.KEY, 'KEY '].includes(c.type));
+        const keyChunk = this.dirFile.chunks.find(c => ['KEY*', 'KEY '].includes(c.type.toUpperCase()));
         if (!keyChunk) return;
 
         const data = await this.dirFile.getChunkData(keyChunk);
@@ -234,7 +235,7 @@ class DirectorExtractor {
     }
 
     async processBitmap(member, map) {
-        const bitdId = map[Magic.BITD] || map['DIB '] || map['DIB*'];
+        const bitdId = map[Magic.BITD] || map['DIB '] || map['DIB*'] || map['bitd'] || map['dib '] || map['dib*'];
         if (!bitdId) return;
 
         let alphaBuf = null;
@@ -268,12 +269,51 @@ class DirectorExtractor {
     }
 
     async processPalette(member, map) {
-        const id = map?.[Magic.CLUT] || map?.[Magic.CLUT.toLowerCase()] || member.id;
+        const id = map?.[Magic.CLUT] || map?.[Magic.CLUT.toLowerCase()] || map?.['clut'] || member.id;
         const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(id));
         if (data) {
             member.palette = Color.parseDirector(data);
             const outPath = path.join(this.outputDir, `${member.name}.json`);
             this.paletteExtractor.save(member.palette, outPath, member);
+        }
+    }
+
+    async processSound(member, map) {
+        const sndId = map[Magic.SND] || map[Magic.snd] || map['SND*'] || map['snd*'];
+        if (!sndId) return;
+        const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(sndId));
+        if (data) {
+            const outPath = path.join(this.outputDir, member.name);
+            this.soundExtractor.save(data, outPath, member);
+        }
+    }
+
+    async processFont(member, map) {
+        const fontId = map[Magic.VWFT] || map[Magic.FONT] || map['VWFT'] || map['FONT'] || map['vwft'] || map['font'];
+        if (!fontId) return;
+        const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(fontId));
+        if (data) {
+            const outPath = path.join(this.outputDir, member.name);
+            this.fontExtractor.save(data, outPath);
+        }
+    }
+
+    async processShape(member, map) {
+        let palette = Color.getMacSystem7();
+        if (member.paletteId > 0 && this.sharedPalettes[member.paletteId]) {
+            palette = this.sharedPalettes[member.paletteId];
+        }
+        const outPath = path.join(this.outputDir, member.name);
+        this.shapeExtractor.save(outPath, member, palette);
+    }
+
+    async processXtra(member, map) {
+        const xtraId = map[Magic.XTRA] || map['xtra'] || map['XTRA'];
+        if (!xtraId) return;
+        const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(xtraId));
+        if (data) {
+            const outPath = path.join(this.outputDir, `${member.name}.xtra`);
+            this.genericExtractor.save(data, outPath);
         }
     }
 

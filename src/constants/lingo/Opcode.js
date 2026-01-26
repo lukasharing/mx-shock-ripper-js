@@ -1,5 +1,5 @@
 /**
- * @version 1.1.0
+ * @version 1.1.1
  * Opcode.js - Lingo bytecode mnemonics and mapping tables
  */
 

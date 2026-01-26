@@ -1,5 +1,5 @@
 /**
- * @version 1.1.0
+ * @version 1.1.1
  * ScriptExtractor.js - Post-processing and persistence for Lingo scripts
  * 
  * Implements a rule-based beautification engine for raw decompiled Lingo code 

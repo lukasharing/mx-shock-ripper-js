@@ -1,5 +1,5 @@
 /**
- * @version 1.1.0
+ * @version 1.1.1
  * Magic.js - FourCC identifiers and Magic numbers for Director chunks
  */
 
@@ -22,5 +22,7 @@ module.exports = {
     snd: 'snd ',  // Sound (Platform-specific lowercase)
     STXT: 'STXT', // Script Text (Lingo source)
     TEXT: 'TEXT', // Text Member Content
-    ALFA: 'ALFA'  // Alpha Mask
+    ALFA: 'ALFA', // Alpha Mask
+    SHAP: 'SHAP', // Shape Data
+    XTRA: 'XTRA'  // Xtra Data
 };

@@ -1,5 +1,5 @@
 /**
- * @version 1.1.0
+ * @version 1.1.1
  * DirectorFile.js - Core binary parser for Adobe Director project archives
  * 
  * This class handles the low-level parsing of RIFX (Mac), XFIR (Windows), 
@@ -124,13 +124,13 @@ class DirectorFile {
      */
     async calculateAfterburnedStructure() {
         // 1. File Version (Fver)
-        if (this._peekUnprotected() === 'Fver') {
+        if (this._peekUnprotected().toUpperCase() === 'FVER') {
             this.ds.readFourCC();
             this.ds.skip(this.ds.readVarInt());
         }
 
         // 2. Logical Mapping (Fmap)
-        if (this._peekUnprotected() === 'Fmap') {
+        if (this._peekUnprotected().toUpperCase() === 'FMAP') {
             this.ds.readFourCC();
             const fmapEnd = this.ds.position + this.ds.readVarInt();
             this.fmap = {};
@@ -142,7 +142,7 @@ class DirectorFile {
         }
 
         // 3. File Catalog (Fcdr)
-        if (this._peekUnprotected() === 'Fcdr') {
+        if (this._peekUnprotected().toUpperCase() === 'FCDR') {
             this.ds.readFourCC();
             const fcdrLen = this.ds.readVarInt();
             const fcdrDecomp = zlib.inflateSync(this.ds.readBytes(fcdrLen));
@@ -152,21 +152,20 @@ class DirectorFile {
 
         // 4. Asset Allocation (Abmp)
         const tag = this._peekUnprotected();
-        if (['Abmp', 'pmbA'].includes(tag.toUpperCase())) {
+        if (['ABMP', 'PMBA'].includes(tag.toUpperCase())) {
             this.ds.readFourCC();
             const abmpEnd = this.ds.position + this.ds.readVarInt();
-            this.ds.readVarInt();
-            this.ds.readVarInt();
+            this.ds.readVarInt(); // skip uncompressed size
             const abmpDecomp = zlib.inflateSync(this.ds.readBytes(abmpEnd - this.ds.position));
             const abmpDS = new DataStream(abmpDecomp, this.ds.endianness);
-            abmpDS.readVarInt();
-            abmpDS.readVarInt();
+            abmpDS.readVarInt(); // skip unk1
+            abmpDS.readVarInt(); // skip unk2
             const resCount = abmpDS.readVarInt();
             this.mapAssets(abmpDS, resCount);
         }
 
         // 5. Inline Stream (FGEI)
-        if (['FGEI', 'IEGF'].includes(this._peekUnprotected())) {
+        if (['FGEI', 'IEGF'].includes(this._peekUnprotected().toUpperCase())) {
             this.ds.readFourCC();
             this.ds.readVarInt();
             this.ilsBodyOffset = this.ds.position;
@@ -274,7 +273,12 @@ class DirectorFile {
      * Translates protected Afterburner tags back to their standard FourCC names.
      */
     static unprotect(tag) {
-        return AfterburnerTags[tag] || tag;
+        if (!tag) return tag;
+        const upTag = tag.toUpperCase();
+        for (const key of Object.keys(AfterburnerTags)) {
+            if (key.toUpperCase() === upTag) return AfterburnerTags[key];
+        }
+        return tag;
     }
 }
 
