@@ -1,5 +1,5 @@
 /**
- * @version 1.1.2
+ * @version 1.1.3
  * DirectorExtractor.js - Strategic extraction orchestrator for Adobe Director assets
  * 
  * This class coordinates the high-level extraction workflow, managing 
@@ -455,7 +455,7 @@ class DirectorExtractor {
         const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(id));
         if (data) {
             member.palette = Color.parseDirector(data);
-            const outPath = path.join(this.outputDir, `${member.name}.json`);
+            const outPath = path.join(this.outputDir, `${member.name}.pal`);
             this.paletteExtractor.save(member.palette, outPath, member);
         }
     }
@@ -528,7 +528,6 @@ class DirectorExtractor {
         }
 
         if (text && text.trim()) {
-            this.log('DEBUG', `Member ${member.name}: Saving script from ${source} chunk source.`);
             const isScript = member.typeId === MemberType.Script;
             const extension = isScript ? '.ls' : '';
             const outPath = path.join(this.outputDir, `${member.name}${extension}`);
@@ -574,12 +573,15 @@ class DirectorExtractor {
 
     async matchDanglingScripts() {
         const scripts = this.members.filter(m => m.typeId === MemberType.Script && !m.scriptFile);
-        const unusedLscr = this.dirFile.chunks.filter(c => c.type === Magic.LSCR && !this.resToMember[c.id]);
+        const lscrChunks = this.dirFile.chunks.filter(c => c.type === Magic.LSCR && !this.resToMember[c.id]);
 
-        if (scripts.length === unusedLscr.length && scripts.length > 0) {
-            for (let i = 0; i < scripts.length; i++) {
-                const data = await this.dirFile.getChunkData(unusedLscr[i]);
-                const decompiled = this.lingoDecompiler.decompile(data, null, this.nameTable);
+        if (scripts.length > 0 && lscrChunks.length > 0) {
+            this.log('INFO', `Attempting to match ${scripts.length} dangling scripts...`);
+            for (let i = 0; i < Math.min(scripts.length, lscrChunks.length); i++) {
+                const data = await this.dirFile.getChunkData(lscrChunks[i]);
+                if (!data) continue;
+
+                const decompiled = this.lingoDecompiler.decompile(data, this.nameTable);
                 if (decompiled?.text) {
                     const outPath = path.join(this.outputDir, `${scripts[i].name}.ls`);
                     fs.writeFileSync(outPath, decompiled.text);

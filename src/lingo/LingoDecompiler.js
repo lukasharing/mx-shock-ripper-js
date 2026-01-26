@@ -1,5 +1,5 @@
 /**
- * @version 1.1.2
+ * @version 1.1.3
  * LingoDecompiler.js - Advanced Multi-Phase Lingo Decompiler
  * 
  * Implements a robust state-machine for transforming Director bytecode (Lscr) 
@@ -37,36 +37,36 @@ class LingoDecompiler {
      * @param {number} extType - External script context (Behavior/Script/Cast)
      * @param {object} options - Generation options (lasm, etc)
      */
-    decompile(lscrData, lctxData = null, nameTable = [], extType = 0, options = {}) {
+    decompile(lscrData, nameTable = [], externalScriptType = 0, memberId = 0, options = {}) {
         try {
             const stream = new DataStream(lscrData, 'big');
-            const schema = this._probeSchema(stream, extType);
-            const cal = this._calibrateNaming(lscrData, nameTable, schema);
+            const { hLen, sType, map } = this._probeSchema(lscrData, externalScriptType);
+            const cal = this._calibrateNaming(lscrData, nameTable, map, hLen, sType);
 
             /**
              * Internal categorical symbol resolver.
              */
             const resolveName = (id, category) => {
-                if (!nameTable || nameTable.length === 0) return `${category}_${id}`;
+                if (!nameTable || nameTable.length === 0) return category.includes("prop") ? `p_${id}` : `n_${id}`;
 
-                let shift = cal.handlerShift;
-                if (category === 'global') shift = cal.globalShift;
-                else if (category === 'movie') shift = cal.movieShift;
+                let shift = cal.hShift;
+                if (category === "global_prop") shift = cal.gShift;
+                else if (category === "movie_prop") shift = cal.mShift;
 
                 const N = nameTable.length;
                 const idx = (id - shift + (N * 50)) % N;
-                const name = nameTable[idx] || `u_${id}`;
+                let name = nameTable[idx] || `u_${id}`;
 
                 // Handle system overrides
-                if (id === LingoConfig.SPECIAL_IDS.TRACE_SCRIPT) return 'traceScript';
-                if (id === LingoConfig.SPECIAL_IDS.PLAYER) return '_player';
-                if (id === LingoConfig.SPECIAL_IDS.MOVIE) return '_movie';
+                if (id === LingoConfig.SPECIAL_IDS.TRACE_SCRIPT) name = 'traceScript';
+                if (id === LingoConfig.SPECIAL_IDS.PLAYER) name = '_player';
+                if (id === LingoConfig.SPECIAL_IDS.MOVIE) name = '_movie';
                 return name;
             };
 
-            const literals = this._parseLiterals(stream, schema.map);
-            const properties = this._parseProperties(stream, schema.map, resolveName);
-            const handlers = this._parseHandlers(stream, schema.map, schema.headerLen);
+            const literals = this._parseLiterals(stream, map);
+            const properties = this._parseProperties(stream, map, resolveName);
+            const handlers = this._parseHandlers(stream, map, hLen);
 
             const scripts = [];
             const lasmBlocks = [];
@@ -79,8 +79,12 @@ class LingoDecompiler {
                 const locals = this._getSymbols(stream, handler.localCount, handler.localOffset, resolveName);
 
                 // Auto-inject 'me' for behavior/parent scripts if missing in names
-                const isObject = [LingoConfig.SCRIPT_TYPE.PARENT, LingoConfig.SCRIPT_TYPE.LEGACY_PARENT, LingoConfig.SCRIPT_TYPE.LEGACY_BEHAVIOR].includes(schema.scriptType);
-                if (isObject && !args.includes('me')) args.unshift('me');
+                const isObjectScript = (sType & 0xFF) === LingoConfig.SCRIPT_TYPE.LEGACY_BEHAVIOR ||
+                    (sType & 0xFF) === LingoConfig.SCRIPT_TYPE.LEGACY_PARENT ||
+                    (sType & 0xFF) === LingoConfig.SCRIPT_TYPE.LEGACY_CAST ||
+                    (sType >> 4) > 0;
+
+                if (isObjectScript && !args.includes('me')) args.unshift('me');
 
                 const hName = resolveName(handler.nameId, 'handler');
                 const codes = Bytecode.parse(lscrData, handler.offset, handler.length, literals, resolveName);
@@ -143,71 +147,122 @@ class LingoDecompiler {
         }
     }
 
-    _probeSchema(ds, extType) {
-        ds.seek(16);
-        const headerLen = ds.readUint16();
-        const scriptType = ds.readUint16() || extType;
+    _probeSchema(data, extType) {
+        const hLen = data.readUInt16BE(16);
+        const sType = data.readUInt16BE(18) || extType;
         const map = new Map();
 
-        if (headerLen === LingoConfig.V4_HLEN) {
-            ds.seek(60); map.set('PROP', { count: ds.readUint16(), offset: ds.readUint32() });
-            ds.seek(72); map.set('HAND', { count: ds.readUint16(), offset: ds.readUint32() });
-            ds.seek(78); map.set('LIT ', { count: ds.readUint16(), offset: ds.readUint32() });
-            ds.seek(84); map.set('LTD ', { len: ds.readUint32(), offset: ds.readUint32() });
+        if (hLen === LingoConfig.V4_HLEN) {
+            const r16 = (p) => data.readUInt16BE(p);
+            const r32 = (p) => data.readUInt32BE(p);
+            map.set('PROP', { count: r16(60), offset: r32(62) });
+            map.set('HAND', { count: r16(72), offset: r32(74) });
+            map.set('LIT ', { count: r16(78), offset: r32(80) });
+            map.set('LTD ', { len: r32(84), offset: r32(88) });
         } else {
-            ds.seek(headerLen === 54 ? 52 : 50);
-            const tagCount = ds.readUint16();
-            for (let i = 0; i < tagCount; i++) {
-                map.set(ds.readFourCC(), { offset: ds.readUint32(), len: ds.readUint32() });
+            const ds = new DataStream(data, 'big');
+            ds.seek(hLen === 54 ? 52 : 50);
+            const count = ds.readUint16();
+            for (let i = 0; i < count; i++) {
+                const tag = ds.readFourCC();
+                const entry = { offset: ds.readUint32(), len: ds.readUint32() };
+                map.set(tag, entry);
             }
         }
-        return { headerLen, scriptType, map };
+        return { hLen, sType, map };
     }
 
-    _calibrateNaming(data, names, schema) {
-        let handlerShift = 0, globalShift = 0, movieShift = 0;
-        const handInfo = schema.map.get('HAND');
-        if (names?.length > 0 && handInfo) {
-            const ds = new DataStream(data, 'big');
-            ds.seek(handInfo.offset);
-            const firstId = ds.readUint16();
-            const nIdx = names.indexOf('new'), cIdx = names.indexOf('construct');
-            if (firstId === nIdx || firstId === cIdx) handlerShift = 0;
-            else if (nIdx !== -1) handlerShift = (firstId - nIdx + names.length) % names.length;
+    _calibrateNaming(data, names, map, hLen, sType) {
+        let hShift = 0, gShift = 0, mShift = 0;
+        const info = map.get('HAND');
 
-            const tsIdx = names.indexOf('traceScript');
-            if (tsIdx !== -1) {
-                ds.seek(handInfo.offset + 4);
-                const codeOff = ds.readUint32();
-                if (codeOff > 0 && codeOff < data.length) {
-                    for (let p = codeOff; p < Math.min(codeOff + 500, data.length - 2); p++) {
-                        if (data[p] === 0x41) {
-                            globalShift = (data.readUInt16BE(p + 1) - tsIdx + names.length) % names.length;
-                            break;
+        if (names && names.length > 0 && info) {
+            const ds = new DataStream(data, 'big');
+            ds.seek(info.offset);
+            const firstId = ds.readUint16();
+
+            const nIdx = names.indexOf("new");
+            const cIdx = names.indexOf("construct");
+
+            if (firstId === nIdx || firstId === cIdx) {
+                hShift = 0;
+            } else if ([LingoConfig.SCRIPT_TYPE.CAST, LingoConfig.SCRIPT_TYPE.LEGACY_BEHAVIOR, LingoConfig.SCRIPT_TYPE.LEGACY_CAST].includes(sType & 0xFF)) {
+                if (nIdx !== -1) hShift = (firstId - nIdx + names.length) % names.length;
+                else if (cIdx !== -1) hShift = (firstId - cIdx + names.length) % names.length;
+            } else {
+                hShift = 0;
+            }
+
+            const tIdx = names.indexOf("traceScript");
+            if (tIdx !== -1) {
+                ds.seek(info.offset); ds.skip(4);
+                const co = ds.readUint32();
+                if (co > 0 && co < data.length) {
+                    let pos = co, max = Math.min(co + 1000, data.length);
+                    while (pos < max - 2) {
+                        const op = data[pos];
+                        const idx = (op >= LingoConfig.OP_SHIFT_THRESHOLD) ? LingoConfig.OP_SHIFT_THRESHOLD + (op % LingoConfig.OP_SHIFT_THRESHOLD) : op;
+                        let len = (op >= 0xc0) ? 5 : (op >= 0x80) ? 3 : (op >= LingoConfig.OP_SHIFT_THRESHOLD) ? 2 : 1;
+                        if (len > 1 && (pos + 1 + 2 <= data.length)) {
+                            const id = data.readUInt16BE(pos + 1);
+                            if ([LingoConfig.OP_SPEC.PUSHVAR, LingoConfig.OP_SPEC.MOVIEPROP].includes(idx)) {
+                                if (mShift === 0) mShift = (id - tIdx + names.length) % names.length;
+                            } else if (idx === LingoConfig.OP_SPEC.GETTOPLEVELPROP) {
+                                if (gShift === 0) gShift = (id - tIdx + names.length) % names.length;
+                            }
                         }
+                        pos += len;
                     }
                 }
             }
+            if (mShift === 0) mShift = hShift;
+            if (gShift === 0) gShift = hShift;
         }
-        return { handlerShift, globalShift, movieShift };
+        return { hShift, gShift, mShift };
     }
 
-    _parseLiterals(ds, map) {
-        const info = map.get('LIT '), data = map.get('LTD ');
-        const results = [];
-        if (!info || !data) return results;
-        ds.seek(info.offset);
-        const offsets = Array.from({ length: info.count || (info.len / 4) }, () => ds.readUint32());
-        for (const off of offsets) {
-            ds.seek(data.offset + off);
-            const type = ds.readUint32(), len = ds.readUint32();
-            if (type === LingoConfig.LITERAL_TYPE.STRING) results.push(ds.readString(len).replace(/\0/g, ''));
-            else if (type === LingoConfig.LITERAL_TYPE.INT) results.push(ds.readInt32());
-            else if (type === LingoConfig.LITERAL_TYPE.FLOAT) { ds.readUint32(); results.push(ds.readDouble()); }
-            else if (type === LingoConfig.LITERAL_TYPE.SYMBOL) results.push(ds.readString(len).replace(/\0/g, ''));
-            else results.push(0);
+    _parseLiterals(stream, map) {
+        const info = map.get('LIT '), dinfo = map.get('LTD ');
+        if (!info || !dinfo) return [];
+
+        stream.seek(info.offset);
+        const descriptors = [];
+        const count = (info.count !== undefined) ? info.count : (info.len / 8);
+        for (let i = 0; i < count; i++) {
+            descriptors.push({ t: stream.readUint32(), o: stream.readUint32() });
         }
-        return results;
+
+        const list = [];
+        for (let i = 0; i < descriptors.length; i++) {
+            const desc = descriptors[i];
+            stream.seek(dinfo.offset + desc.o);
+            const len = (i < descriptors.length - 1) ? (descriptors[i + 1].o - desc.o) : (dinfo.len - desc.o);
+            list.push(this._readLit(desc.t, stream, len));
+        }
+        return list;
+    }
+
+    _readLit(type, stream, len) {
+        switch (type) {
+            case LingoConfig.LITERAL_TYPE.INT: return new AST.IntLiteral(stream.readInt32());
+            case LingoConfig.LITERAL_TYPE.STRING:
+                const sl = stream.readUint32();
+                return new AST.StringLiteral(sl > 0 ? stream.readString(sl - 1) : "");
+            case LingoConfig.LITERAL_TYPE.FLOAT:
+                stream.readUint32();
+                return new AST.FloatLiteral(stream.readDouble());
+            case LingoConfig.LITERAL_TYPE.SYMBOL:
+                const syl = stream.readUint32();
+                return new AST.SymbolLiteral(syl > 0 ? stream.readString(syl - 1) : "");
+            case LingoConfig.LITERAL_TYPE.LIST:
+                const count = stream.readUint32();
+                const items = [];
+                for (let i = 0; i < count; i++) {
+                    items.push(this._readLit(stream.readUint32(), stream, stream.readUint32()));
+                }
+                return new AST.ListLiteral(items);
+            default: return new AST.ERROR(`LT_${type}`);
+        }
     }
 
     _parseProperties(ds, map, getName) {

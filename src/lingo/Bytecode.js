@@ -1,5 +1,5 @@
 /**
- * @version 1.1.2
+ * @version 1.1.3
  * Bytecode.js - Lingo bytecode decoding and mnemonic mapping
  * 
  * Responsible for translating raw binary opcodes into human-readable mnemonics 
@@ -16,26 +16,29 @@ class Bytecode {
     static parse(buffer, offset, length, literals = [], resolveName = null) {
         const results = [];
         let p = offset;
-        const end = offset + length;
+        const end = Math.min(offset + length, buffer.length);
 
-        while (p < end && p < buffer.length) {
+        while (p < end) {
             const pos = p;
             const op = buffer[p++];
             let obj = 0, objLen = 0;
 
             if (op >= LingoConfig.OP_SHIFT_THRESHOLD) {
-                // Determine object size and signedness
+                const idx = op >= 0x80 ? LingoConfig.OP_SHIFT_THRESHOLD + (op % LingoConfig.OP_SHIFT_THRESHOLD) : op;
+
                 if (op >= 0xC0) {
-                    obj = (op === 0xEF) ? buffer.readInt32BE(p) : buffer.readUInt32BE(p);
+                    if (p + 4 > end) break;
+                    obj = (idx === 0x6f) ? buffer.readInt32BE(p) : buffer.readUInt32BE(p);
                     objLen = 4; p += 4;
                 } else if (op >= 0x80) {
-                    // Some 3-byte ops are signed (jumps, etc)
-                    const subOp = op % LingoConfig.OP_SHIFT_THRESHOLD;
-                    obj = [0x13, 0x14, 0x15, 0x2e].includes(subOp) ? buffer.readInt16BE(p) : buffer.readUInt16BE(p);
+                    if (p + 2 > end) break;
+                    // Fixed signed/unsigned detection for 3-byte opcodes
+                    const isSigned = [0x41, 0x6e, 0x53, 0x54, 0x55, 0x56, 0x6f].includes(idx);
+                    obj = isSigned ? buffer.readInt16BE(p) : buffer.readUInt16BE(p);
                     objLen = 2; p += 2;
                 } else {
-                    const subOp = op % LingoConfig.OP_SHIFT_THRESHOLD;
-                    obj = [0x13, 0x14, 0x15].includes(subOp) ? buffer.readInt8(p) : buffer[p];
+                    if (p + 1 > end) break;
+                    obj = (idx === 0x41) ? buffer.readInt8(p) : buffer.readUInt8(p);
                     objLen = 1; p++;
                 }
             }

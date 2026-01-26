@@ -1,4 +1,4 @@
-/** @version 1.1.2 - Generic Director Asset Ripper */
+/** @version 1.1.3 - Generic Director Asset Ripper */
 const DataStream = require('../utils/DataStream');
 const GenericExtractor = require('./GenericExtractor');
 const { Resources: { Labels } } = require('../Constants');
@@ -48,6 +48,18 @@ class PaletteExtractor extends GenericExtractor {
             content += `${color[0]} ${color[1]} ${color[2]}\r\n`;
         }
         return content;
+    }
+
+    /**
+     * Persists the palette to disk in JASC-PAL format.
+     */
+    save(palette, outputPath, member) {
+        const content = this.formatJasc(palette);
+        const res = this.saveFile(content, outputPath, "Palette");
+        if (res && member) {
+            member.paletteFile = res.file;
+        }
+        return res;
     }
 }
 
