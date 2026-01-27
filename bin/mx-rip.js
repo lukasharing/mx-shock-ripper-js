@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @version 1.1.6
+ * @version 1.1.8
  * mx-rip.js - Command-line interface for mx-shock-ripper-js
  * 
  * Provides a standardized CLI for extracting assets from .dcr, .cct, and .dir files. 
@@ -13,7 +13,7 @@ const { DCRExtractor, CCTExtractor } = require('../index');
 
 function showHelp() {
     process.stdout.write(`
-mx-shock-ripper-js - Production Grade Director Asset Ripper v1.1.5
+mx-shock-ripper-js - Production Grade Director Asset Ripper v1.1.8
 
 Usage:
   mx-rip <input_file> [output_dir] [options]
@@ -27,6 +27,8 @@ Options:
   --text      Extract text members
   --field     Extract field members
   --font      Extract font binary chunks
+  --xtra      Extract Xtra binary blobs
+  --lasm      Generate Lingo assembly files (.lasm)
   --colored   Attempt bitmap colorization (requires palette discovery)
   --force     Overwrite existing output directories
   --help      Show this help message
@@ -61,6 +63,8 @@ async function main() {
         text: flags.includes('--text'),
         field: flags.includes('--field'),
         font: flags.includes('--font'),
+        xtra: flags.includes('--xtra'),
+        lasm: flags.includes('--lasm'),
         colored: flags.includes('--colored')
     };
 

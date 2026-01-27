@@ -1,5 +1,5 @@
 /**
- * @version 1.1.7
+ * @version 1.1.8
  * DirectorExtractor.js - Strategic extraction orchestrator for Adobe Director assets
  * 
  * Coordinates the high-level extraction workflow, managing 

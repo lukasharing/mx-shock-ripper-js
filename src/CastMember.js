@@ -247,7 +247,10 @@ class CastMember {
 
         // Prune empty or redundant fields for production JSON
         return Object.fromEntries(
-            Object.entries(obj).filter(([_, v]) => v !== null && v !== undefined && v !== '')
+            Object.entries(obj).filter(([k, v]) => {
+                if (['id', 'name', 'type'].includes(k)) return true;
+                return v !== null && v !== undefined && v !== '';
+            })
         );
     }
 }
