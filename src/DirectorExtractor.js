@@ -1,5 +1,5 @@
 /**
- * @version 1.1.8
+ * @version 1.1.9
  * DirectorExtractor.js - Strategic extraction orchestrator for Adobe Director assets
  * 
  * Coordinates the high-level extraction workflow, managing 
@@ -168,28 +168,66 @@ class DirectorExtractor {
         if (!data) return;
 
         const ds = new DataStream(data, 'big');
-        ds.readInt16(); // len
+        const len = ds.readInt16();
         const fileVer = ds.readInt16();
         const stage = { top: ds.readInt16(), left: ds.readInt16(), bottom: ds.readInt16(), right: ds.readInt16() };
 
-        ds.readInt16(); // minMember
-        ds.readInt16(); // maxMember
-        ds.seek(Offsets.DirConfig.DirectorVersion);
+        const minMember = ds.readInt16();
+        const maxMember = ds.readInt16();
+
+        // Use humanVersion early to handle different versions
+        ds.seek(36);
         const dirVer = ds.readInt16();
+        const ver = this.humanVersion(dirVer);
+        const verNum = parseInt(ver.replace(/\./g, '')) || 0; // e.g. 702
+
+        // Stage Color logic
+        let stageColor = "#FFFFFF";
+        if (verNum < 700) {
+            ds.seek(26);
+            const paletteIdx = ds.readInt16();
+            stageColor = `Palette Index ${paletteIdx}`;
+        } else {
+            ds.seek(18);
+            const g = ds.readUint8();
+            const b = ds.readUint8();
+            ds.seek(26);
+            const isRGB = ds.readUint8();
+            const r = ds.readUint8();
+            if (isRGB) {
+                stageColor = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`.toUpperCase();
+            } else {
+                stageColor = `Palette Index ${r}`;
+            }
+        }
+
+        ds.seek(28);
+        const bitDepth = ds.readInt16();
 
         ds.seek(Offsets.DirConfig.FrameRate);
         const frameRate = ds.readInt16();
-        const platform = ds.readInt16();
-        const protection = ds.readInt16();
+        const platformId = ds.readInt16();
+        const protectionVal = ds.readInt16();
+
+        const platformMap = {
+            "-1": "Macintosh",
+            "1024": "Windows"
+        };
+        const platform = platformMap[platformId] || `Unknown (${platformId})`;
+        const protection = (protectionVal % 23 === 0) ? "Protected" : "None";
 
         this.metadata.movie = {
             fileVersion: fileVer,
             directorVersion: dirVer,
+            humanVersion: ver,
             stageRect: stage,
             frameRate,
+            bitDepth,
+            stageColor,
             platform,
             protection,
-            humanVersion: this.humanVersion(dirVer)
+            minMember,
+            maxMember
         };
         this.bitmapExtractor.fileVersion = fileVer;
         fs.writeFileSync(path.join(this.outputDir, 'movie.json'), JSON.stringify(this.metadata.movie, null, 2));
@@ -203,15 +241,62 @@ class DirectorExtractor {
         const scoreChunk = this.dirFile.chunks.find(c => c.type === Magic.VWSC || c.type === Magic.SCORE);
         if (!scoreChunk) return;
 
+        const data = await this.dirFile.getChunkData(scoreChunk);
+        if (!data) return;
+
         const timeline = {
-            hasScore: true,
-            chunks: [{
+            frameCount: 0,
+            markers: [],
+            scoreChunk: {
                 id: scoreChunk.id,
                 type: scoreChunk.type,
-                size: scoreChunk.len,
-                note: "Internal parsing not implemented"
-            }]
+                size: data.length
+            }
         };
+
+        const ds = new DataStream(data, 'big');
+
+        try {
+            if (scoreChunk.type === Magic.VWSC) {
+                // VWSC (Director 4 Score)
+                // [2] sz, [2] ver, [4] numFrames, [4] labelsOffset, [4] something...
+                ds.seek(4);
+                timeline.frameCount = ds.readUint32();
+                const labelsOffset = ds.readUint32();
+
+                if (labelsOffset > 0 && labelsOffset < data.length) {
+                    ds.seek(labelsOffset);
+                    const labelCount = ds.readUint16();
+                    for (let i = 0; i < labelCount; i++) {
+                        if (ds.position + 3 > data.length) break;
+                        const frame = ds.readUint16();
+                        const nameLen = ds.readUint8();
+                        const name = ds.readString(nameLen);
+                        timeline.markers.push({ frame, name });
+                    }
+                }
+            } else if (scoreChunk.type === Magic.SCORE) {
+                // SCORE (Director 5+ Score)
+                // Often has a similar structure or a secondary header.
+                // For now, let's try to find labels by searching for the "labels" magic or expected layout.
+                ds.seek(12);
+                const labelsOffset = ds.readUint32();
+                if (labelsOffset > 0 && labelsOffset < data.length) {
+                    ds.seek(labelsOffset);
+                    const labelCount = ds.readUint16();
+                    for (let i = 0; i < labelCount; i++) {
+                        if (ds.position + 3 > data.length) break;
+                        const frame = ds.readUint16();
+                        const nameLen = ds.readUint8();
+                        const name = ds.readString(nameLen);
+                        timeline.markers.push({ frame, name });
+                    }
+                }
+            }
+        } catch (e) {
+            this.log('WARN', `Failed to parse timeline details: ${e.message}`);
+        }
+
         fs.writeFileSync(path.join(this.outputDir, 'timeline.json'), JSON.stringify(timeline, null, 2));
     }
 
@@ -222,24 +307,85 @@ class DirectorExtractor {
         const data = await this.dirFile.getChunkData(chunk);
         if (!data) return;
 
+        // Director ListChunks (like MCsL) have a structured format:
+        // [4] dataOffset
+        // [...] Other header fields
+        // [at dataOffset]: [2] offsetTableCount, [4*count] offsetTable
+        // [at end of offsetTable]: [4] itemsLength, [...] item data
+
+        const ds = new DataStream(data, 'big');
+        const dataOffset = ds.readUint32();
+        ds.skip(2); // unk0
+        const castCount = ds.readUint16();
+        const itemsPerCast = ds.readUint16();
+
+        if (castCount === 0 || itemsPerCast === 0) return;
+
+        ds.seek(dataOffset);
+        const offsetTableLen = ds.readUint16();
+        const offsets = [];
+        for (let i = 0; i < offsetTableLen; i++) {
+            offsets.push(ds.readUint32());
+        }
+
+        const itemsLen = ds.readUint32();
+        const itemsBase = ds.position;
+
+        const readItem = (idx) => {
+            if (idx >= offsets.length) return null;
+            const start = offsets[idx];
+            const end = (idx + 1 < offsets.length) ? offsets[idx + 1] : itemsLen;
+            if (start >= end) return null;
+
+            const itemData = data.slice(itemsBase + start, itemsBase + end);
+            if (itemData.length === 0) return "";
+
+            // Try as Pascal string first (common in ListChunks for names/paths)
+            const len = itemData[0];
+            if (len > 0 && len < itemData.length) {
+                return itemData.slice(1, 1 + len).toString('utf8');
+            }
+            return itemData.toString('utf8').replace(/\0/g, '').trim();
+        };
+
         const castList = [];
-        let pos = 0;
-        while (pos < data.length - 2) {
-            const len = data.readUInt16BE(pos);
-            if (len > 0 && len < 256 && (pos + 2 + len + 2) < data.length) {
-                const name = data.slice(pos + 2, pos + 2 + len).toString();
-                let p2 = pos + 2 + len;
-                if (p2 + 2 < data.length) {
-                    const len2 = data.readUInt16BE(p2);
-                    if (len2 >= 0 && len2 < 512) {
-                        const pathStr = data.slice(p2 + 2, p2 + 2 + len2).toString();
-                        castList.push({ name, path: pathStr });
-                        pos = p2 + 2 + len2 + 9;
-                        continue;
-                    }
+        const actualCastCount = Math.floor(offsetTableLen / itemsPerCast);
+
+        const preloadMap = {
+            0: "Never",
+            1: "When Needed",
+            2: "Before Frame 1",
+            3: "After Frame 1"
+        };
+
+        for (let i = 0; i < actualCastCount; i++) {
+            let name = readItem(i * itemsPerCast + 1) || "Unnamed Cast";
+            let pathStr = readItem(i * itemsPerCast + 2) || "";
+
+            // Preload settings are usually the 3rd item (index 3 in 1-based, index 2 in 0-based relative to cast start)
+            let preloadMode = "When Needed";
+            const preloadIdx = i * itemsPerCast + 3;
+            if (preloadIdx < offsetTableLen) {
+                const pData = data.slice(itemsBase + offsets[preloadIdx], itemsBase + (offsets[preloadIdx + 1] || itemsLen));
+                if (pData.length >= 2) {
+                    const modeVal = pData.readUInt16BE(0);
+                    preloadMode = preloadMap[modeVal] || `Unknown (${modeVal})`;
                 }
             }
-            pos++;
+
+            // Cleanup: If name is a path and path is empty, fix it
+            if (name.includes('\\') || name.includes('/') || name.toLowerCase().endsWith('.cst') || name.toLowerCase().endsWith('.cct')) {
+                if (!pathStr) pathStr = name;
+                name = path.basename(name.replace(/\\/g, '/')).replace(/\.(cst|cct|dcr|dir)$/i, '');
+            }
+
+            if (pathStr && (pathStr.includes('\\') || pathStr.includes('/')) && !pathStr.toLowerCase().match(/\.(cst|cct|dcr|dir)$/)) {
+                pathStr += '.cst';
+            }
+
+            if (name.toLowerCase() === 'internal') continue;
+
+            castList.push({ name, path: pathStr, preloadMode });
         }
 
         if (castList.length > 0) {

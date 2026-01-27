@@ -1,5 +1,5 @@
 /**
- * @version 1.1.7
+ * @version 1.1.9
  * Color.js - Palette and Color management for Director Assets
  * 
  * Provides reference implementations of the standard Adobe Director 

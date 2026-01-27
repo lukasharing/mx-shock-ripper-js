@@ -1,5 +1,5 @@
 /**
- * @version 1.1.7
+ * @version 1.1.9
  * LingoDecompiler.js
  * 
  * High-performance Lingo bytecode decompiler using a multi-phase 
