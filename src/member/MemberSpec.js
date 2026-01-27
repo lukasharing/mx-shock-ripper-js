@@ -1,5 +1,5 @@
 /**
- * @version 1.1.6
+ * @version 1.1.7
  * MemberSpec.js - Type-specific binary metadata parsers
  * 
  * Each class provides a static 'parse' method for a specific Cast Member type payload.

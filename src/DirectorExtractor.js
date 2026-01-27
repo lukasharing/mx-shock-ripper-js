@@ -1,5 +1,5 @@
 /**
- * @version 1.1.6
+ * @version 1.1.7
  * DirectorExtractor.js - Strategic extraction orchestrator for Adobe Director assets
  * 
  * Coordinates the high-level extraction workflow, managing 
@@ -13,7 +13,7 @@ const Color = require('./utils/Color');
 const DirectorFile = require('./DirectorFile');
 const CastMember = require('./CastMember');
 const DataStream = require('./utils/DataStream');
-const { MemberType, Magic, AfterburnerTags, KeyTableValues, Resources, LingoConfig } = require('./Constants');
+const { MemberType, Magic, AfterburnerTags, KeyTableValues, Resources, LingoConfig, Offsets } = require('./Constants');
 
 // Component Extractors
 const BitmapExtractor = require('./member/BitmapExtractor');
@@ -102,12 +102,12 @@ class DirectorExtractor {
         await this.parseNameTable();
         await this.parseLctxMap();
 
+        if (!fs.existsSync(this.outputDir)) fs.mkdirSync(this.outputDir, { recursive: true });
+
         // 2. Extract Config & Context
         await this.extractConfig();
         await this.extractTimeline();
         await this.extractCastList();
-
-        if (!fs.existsSync(this.outputDir)) fs.mkdirSync(this.outputDir, { recursive: true });
 
         // Pass 1: Extract Member Metadata
         const processingQueue = [];

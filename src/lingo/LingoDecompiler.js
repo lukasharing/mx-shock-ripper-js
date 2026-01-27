@@ -1,5 +1,5 @@
 /**
- * @version 1.1.6
+ * @version 1.1.7
  * LingoDecompiler.js
  * 
  * High-performance Lingo bytecode decompiler using a multi-phase 
@@ -383,7 +383,7 @@ class LingoDecompiler {
             } else if (op >= 0x80) {
                 obj = [0x41, 0x6e, 0x53, 0x54, 0x55, 0x56, 0x6f].includes(idx) ? stream.readInt16() : stream.readUint16();
                 len = 3;
-            } else if (op >= Constants.OP_SHIFT_THRESHOLD) {
+            } else if (op >= LingoConfig.OP_SHIFT_THRESHOLD) {
                 obj = (idx === 0x41) ? stream.readInt8() : stream.readUint8();
                 len = 2;
             }
