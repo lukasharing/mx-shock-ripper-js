@@ -1,4 +1,5 @@
 # mx-shock-ripper-js
+![Version](https://img.shields.io/badge/version-1.1.7-blue)
 
 A high-performance library and CLI toolset for the extraction, analysis, and reconstruction of legacy Adobe Director MX 2004 assets. This project provides a robust framework for converting packed binary archives (.dcr, .cct, .cast) into standard modern formats.
 
