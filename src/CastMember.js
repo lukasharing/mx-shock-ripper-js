@@ -80,7 +80,11 @@ class CastMember {
             [MemberType.Font]: 'Font',
             [MemberType.Mesh]: 'Mesh',
             [MemberType.VectorShape]: 'VectorShape',
-            [MemberType.Flash]: 'Flash'
+            [MemberType.Flash]: 'Flash',
+            [MemberType.Bitmap_53]: 'Bitmap (Type 53)',
+            [MemberType.Unknown_121]: 'Unknown (Type 121)',
+            [MemberType.Unknown_638]: 'Unknown (Type 638)',
+            [MemberType.Unknown_2049]: 'Unknown (Type 2049)'
         };
         return typeMap[typeId] || `Unknown(${typeId})`;
     }

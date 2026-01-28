@@ -22,5 +22,10 @@ module.exports = {
     Font: 16,
     Mesh: 17,
     VectorShape: 18,
-    Flash: 19
+    Flash: 19,
+    // Unmapped / Custom Types
+    Bitmap_53: 53,
+    Unknown_121: 121,
+    Unknown_638: 638,
+    Unknown_2049: 2049
 };

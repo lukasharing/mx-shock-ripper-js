@@ -58,8 +58,7 @@ npm install mx-shock-ripper-js
 The library includes a universal CLI (`mx-rip`) for rapid extraction.
 
 #### Command Help
-```text
-mx-shock-ripper-js - Production Grade Director Asset Ripper v1.1.7
+mx-shock-ripper-js - Production Grade Director Asset Ripper v1.2.0
 
 Usage:
   mx-rip <input_file> [output_dir] [options]
@@ -70,9 +69,11 @@ Options:
   --sound     Extract WAV/MP3 audio
   --palette   Extract palette JSONs
   --shape     Generate SVG for vector shapes
-  --text      Extract text members
+  --vector    Generate SVG for Vector Shapes (Type 18)
+  --filmloop  Extract FilmLoop data (JSON)
+  --text      Extract text members (RTF)
   --field     Extract field members
-  --font      Extract font binary chunks
+  --font      Extract font binary chunks (TTF/OTF detection)
   --xtra      Extract Xtra binary blobs
   --lasm      Generate Lingo assembly files (.lasm)
   --colored   Attempt bitmap colorization (requires palette discovery)
@@ -103,16 +104,17 @@ async function rip() {
 
 For detailed technical specifications, refer to the individual documentation modules:
 
-- [Overview](doc/01_Overview.md)
-- [File Formats](doc/02_FileFormats.md)
-- [Extraction Process](doc/03_ExtractionProcess.md)
-- [Cast Members](doc/04_CastMembers.md)
-- [Lingo Decompiler](doc/05_LingoDecompiler.md)
-- [Bitmap Extraction](doc/06_BitmapExtraction.md)
-- [Sound Extraction](doc/07_SoundExtraction.md)
-- [Lingo AST](doc/08_LingoAST.md)
-- [Palette Extraction](doc/09_PaletteExtraction.md)
-- [Shape Extraction](doc/10_ShapeExtraction.md)
+- [Overview](docs/doc/01_Overview.md)
+- [File Formats](docs/doc/02_FileFormats.md)
+- [Extraction Process](docs/doc/03_ExtractionProcess.md)
+- [Cast Members](docs/doc/04_CastMembers.md)
+- [Lingo Decompiler](docs/doc/05_LingoDecompiler.md)
+- [Bitmap Extraction](docs/doc/06_BitmapExtraction.md)
+- [Sound Extraction](docs/doc/07_SoundExtraction.md)
+- [Lingo AST](docs/doc/08_LingoAST.md)
+- [Palette Extraction](docs/doc/09_PaletteExtraction.md)
+- [Shape Extraction](docs/doc/10_ShapeExtraction.md)
+- [Vector Extraction](docs/doc/11_VectorExtraction.md)
 
 ## 💰 Donation
 

@@ -26,6 +26,8 @@ const FontExtractor = require('./member/FontExtractor');
 const GenericExtractor = require('./member/GenericExtractor');
 const LingoDecompiler = require('./lingo/LingoDecompiler');
 const LnamParser = require('./lingo/LnamParser');
+const VectorShapeExtractor = require('./member/VectorShapeExtractor');
+const MovieExtractor = require('./member/MovieExtractor');
 
 class DirectorExtractor {
     /**
@@ -48,6 +50,12 @@ class DirectorExtractor {
             extractXtra: options.xtra ?? true,
             extractText: options.text ?? true,
             extractField: options.field ?? true,
+            extractShape: options.shape ?? true,
+            extractXtra: options.xtra ?? true,
+            extractText: options.text ?? true,
+            extractField: options.field ?? true,
+            extractVectorShape: options.vectorShape ?? true,
+            extractFilmLoop: options.filmLoop ?? true,
             colored: options.colored ?? false
         };
 
@@ -75,8 +83,11 @@ class DirectorExtractor {
         this.shapeExtractor = new ShapeExtractor(logProxy);
         this.fontExtractor = new FontExtractor(logProxy);
         this.genericExtractor = new GenericExtractor(logProxy);
+        this.genericExtractor = new GenericExtractor(logProxy);
         this.lingoDecompiler = new LingoDecompiler(logProxy);
         this.lnamParser = new LnamParser(logProxy);
+        this.vectorShapeExtractor = new VectorShapeExtractor(logProxy);
+        this.movieExtractor = new MovieExtractor(logProxy);
 
         this.nameTable = {};
         this.lctxMap = {};
@@ -560,6 +571,21 @@ class DirectorExtractor {
             case MemberType.Field:
                 if (this.options.extractField) await this.handleScripts(member, map);
                 break;
+            case MemberType.Field:
+                if (this.options.extractField) await this.handleScripts(member, map);
+                break;
+            case MemberType.VectorShape:
+                if (this.options.extractVectorShape) await this.processVectorShape(member, map);
+                break;
+            case MemberType.FilmLoop:
+                if (this.options.extractFilmLoop) await this.processFilmLoop(member, map);
+                break;
+            default:
+                // Check if it's one of the unknown types we are researching
+                if ([MemberType.Bitmap_53, MemberType.Unknown_121, MemberType.Unknown_638, MemberType.Unknown_2049].includes(member.typeId)) {
+                    await this.processUnknown(member, map);
+                }
+                break;
         }
     }
 
@@ -647,6 +673,60 @@ class DirectorExtractor {
         if (data) {
             const outPath = path.join(this.outputDir, `${member.name}.xtra`);
             this.genericExtractor.save(data, outPath);
+        }
+    }
+
+    async processVectorShape(member, map) {
+        let dataId = 0;
+        if (map) {
+            const keys = Object.keys(map);
+            const dataKey = keys.find(k => !['CASt', 'KEY*', 'Lscr'].includes(k));
+            if (dataKey) dataId = map[dataKey];
+        }
+        if (!dataId) return;
+
+        const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(dataId));
+        if (data) {
+            const outPath = path.join(this.outputDir, member.name);
+            this.vectorShapeExtractor.save(data, outPath, member);
+        }
+    }
+
+    async processFilmLoop(member, map) {
+        let dataId = 0;
+        if (map) {
+            dataId = map[Magic.SCORE] || map[Magic.VWSC] || map['Score'] || map['VWSC'];
+        }
+        if (!dataId) return;
+
+        const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(dataId));
+        if (data) {
+            const outPath = path.join(this.outputDir, member.name);
+            this.movieExtractor.save(data, outPath, member);
+        }
+    }
+
+    async processUnknown(member, map) {
+        this.log('WARNING', `Processing Unknown Member ID ${member.id} (Type: ${member.typeId})...`);
+
+        if (!map) {
+            this.log('WARNING', `No KeyTable entry for member ${member.id}. Cannot find content.`);
+            return;
+        }
+
+        const keys = Object.keys(map);
+        for (const tag of keys) {
+            const chunkId = map[tag];
+            const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(chunkId));
+            if (data) {
+                this.log('INFO', `Dumping chunk ${tag} (${data.length} bytes) for unknown member.`);
+                const hexDump = data.toString('hex');
+                const dumpPath = path.join(this.outputDir, `unknown_${member.typeId}_${member.id}_${tag.replace(/[^a-zA-Z0-9]/g, '_')}.hex`);
+                const binPath = path.join(this.outputDir, `unknown_${member.typeId}_${member.id}_${tag.replace(/[^a-zA-Z0-9]/g, '_')}.bin`);
+
+                fs.writeFileSync(dumpPath, hexDump);
+                fs.writeFileSync(binPath, data);
+            }
         }
     }
 
