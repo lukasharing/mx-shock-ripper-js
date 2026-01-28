@@ -1,5 +1,5 @@
 /**
- * @version 1.2.4
+ * @version 1.2.5
  * CastMember.js - Metadata & geometric state for a single Cast Member
  * 
  * This class encapsulates the dual-nature of Director resources: the standardized 
@@ -234,6 +234,13 @@ class CastMember {
             modified: this.modified,
             flags: this.flags,
             scriptFile: this.scriptFile,
+            textFile: this.textFile,
+            fontFile: this.fontFile,
+            soundFile: this.soundFile,
+            shapeFile: this.shapeFile,
+            xtraFile: this.xtraFile,
+            vectorFile: this.vectorFile,
+            filmLoopFile: this.filmLoopFile,
             palette: (this.palette && !Array.isArray(this.palette)) ? this.palette : undefined,
             shapeType: this.shapeType,
             pattern: this.pattern,

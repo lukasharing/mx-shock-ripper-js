@@ -64,9 +64,11 @@ class MemberProcessor {
     }
 
     async processBitmap(member, map) {
-
-        const bitdId = map[Magic.BITD] || map[Magic.BITD.toLowerCase()];
-        if (!bitdId) return;
+        const bitdId = map[Magic.BITD] || map[Magic.BITD.toLowerCase()] || map['DIB '] || map['DIB*'] || map['Abmp'] || map['PMBA'];
+        if (!bitdId) {
+            this.extractor.log('WARNING', `No BITD/DIB/Abmp/PMBA chunk found for bitmap member ${member.id} (${member.name}). Available tags: ${Object.keys(map).join(', ')}`);
+            return;
+        }
 
         let alphaBuf = null;
         if (map[Magic.ALFA]) {
@@ -100,7 +102,7 @@ class MemberProcessor {
             this.extractor.log('INFO', `Extracting Text: ${member.name}`);
             const outPath = path.join(this.extractor.outputDir, member.name);
             const res = this.extractor.textExtractor.save(data, outPath, member);
-            if (res && res.file) member.text = res.file;
+            if (res && res.file) member.textFile = res.file;
         }
     }
 
@@ -183,12 +185,13 @@ class MemberProcessor {
     }
 
     async processSound(member, map) {
-        const sndId = map[Magic.SND] || map[Magic.SND.toLowerCase()] || map[AfterburnerTags['SND*']] || map[AfterburnerTags['SND*'].toLowerCase()];
+        const sndId = map[Magic.SND] || map[Magic.SND.toLowerCase()] || map[Magic.snd] || map['SND*'] || map['snd '];
         if (!sndId) return;
         const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(sndId));
         if (data) {
             const outPath = path.join(this.extractor.outputDir, member.name);
-            this.extractor.soundExtractor.save(data, outPath, member);
+            const res = this.extractor.soundExtractor.save(data, outPath, member);
+            if (res && res.file) member.soundFile = res.file;
         }
     }
 
@@ -198,7 +201,8 @@ class MemberProcessor {
         const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(fontId));
         if (data) {
             const outPath = path.join(this.extractor.outputDir, member.name);
-            this.extractor.fontExtractor.save(data, outPath);
+            const res = this.extractor.fontExtractor.save(data, outPath);
+            if (res && res.file) member.fontFile = res.file;
         }
     }
 
@@ -206,7 +210,8 @@ class MemberProcessor {
         let palette = this.resolvePalette(member) || Color.getMacSystem7();
         this.extractor.log('INFO', `Extracting Shape: ${member.name}`);
         const outPath = path.join(this.extractor.outputDir, member.name);
-        this.extractor.shapeExtractor.save(outPath, member, palette);
+        const res = this.extractor.shapeExtractor.save(outPath, member, palette);
+        if (res && res.file) member.shapeFile = res.file;
     }
 
     async processXtra(member, map) {
@@ -215,7 +220,8 @@ class MemberProcessor {
         const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(xtraId));
         if (data) {
             const outPath = path.join(this.extractor.outputDir, `${member.name}.xtra`);
-            this.extractor.genericExtractor.save(data, outPath);
+            const res = this.extractor.genericExtractor.save(data, outPath);
+            if (res && res.file) member.xtraFile = res.file;
         }
     }
 
@@ -230,7 +236,8 @@ class MemberProcessor {
         const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(dataId));
         if (data) {
             const outPath = path.join(this.extractor.outputDir, member.name);
-            this.extractor.vectorShapeExtractor.save(data, outPath, member);
+            const res = this.extractor.vectorShapeExtractor.save(data, outPath, member);
+            if (res && res.file) member.vectorFile = res.file;
         }
     }
 
@@ -241,7 +248,8 @@ class MemberProcessor {
         const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(dataId));
         if (data) {
             const outPath = path.join(this.extractor.outputDir, member.name);
-            this.extractor.movieExtractor.save(data, outPath, member);
+            const res = this.extractor.movieExtractor.save(data, outPath, member);
+            if (res && res.file) member.filmLoopFile = res.file;
         }
     }
 

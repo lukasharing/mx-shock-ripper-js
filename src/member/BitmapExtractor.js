@@ -16,7 +16,7 @@ const BitDepth = {
 if (!Alpha.BytesPerPixel) Alpha.BytesPerPixel = 4;
 
 /**
- * @version 1.2.4
+ * @version 1.2.5
  * BitmapExtractor - Deterministic Shockwave Director bitmap (BITD) 
  * parsing and PNG conversion.
  * 
@@ -217,7 +217,6 @@ class BitmapExtractor extends GenericExtractor {
             const outputHeight = shouldRotate ? header.width : header.height;
             const dst = new PNG({ width: outputWidth, height: outputHeight, colorType: 6, inputHasAlpha: true });
 
-            let isEmpty = true;
             for (let y = 0; y < header.height; y++) {
                 for (let x = 0; x < header.width; x++) {
                     const srcIdx = (y * header.width + x) * 4;
@@ -230,16 +229,14 @@ class BitmapExtractor extends GenericExtractor {
                         dst.data[dstIdx + 1] = chunkyData[srcIdx + 1];
                         dst.data[dstIdx + 2] = chunkyData[srcIdx + 2];
                         dst.data[dstIdx + 3] = alphaBuf ? alphaBuf[y * header.width + x] : chunkyData[srcIdx + 3];
-                        if (dst.data[dstIdx + 3] > 0) isEmpty = false;
                     }
                 }
             }
 
-            if (!isEmpty) {
-                const imgData = PNG.sync.write(dst);
-                const result = this.saveFile(imgData, outputPath, "bitmap");
-                if (result) return { width: outputWidth, height: outputHeight, path: result.file };
-            }
+            const imgData = PNG.sync.write(dst);
+            const result = this.saveFile(imgData, outputPath, "bitmap");
+            if (result) return { width: outputWidth, height: outputHeight, path: result.file };
+
             return null;
         } catch (e) {
             this.log('ERROR', `Failed to save bitmap ${member.name}: ${e.stack}`);
