@@ -10,36 +10,45 @@ class MemberProcessor {
 
     async processMemberContent(member, chunk) {
         const map = this.extractor.metadataManager.keyTable[member.id];
-        if (this.extractor.options.extractScript) await this.extractor.scriptHandler.handleScripts(member, map);
-
-        if (!map) return;
 
         switch (member.typeId) {
             case MemberType.Bitmap:
+                if (!map) return;
                 if (this.extractor.options.extractBitmap) await this.processBitmap(member, map);
                 break;
+            case MemberType.Script:
+                if (this.extractor.options.extractScript) await this.extractor.scriptHandler.handleScripts(member, map);
+                break;
             case MemberType.Sound:
+                if (!map) return;
                 if (this.extractor.options.extractSound) await this.processSound(member, map);
                 break;
             case MemberType.Font:
+                if (!map) return;
                 if (this.extractor.options.extractFont) await this.processFont(member, map);
                 break;
             case MemberType.Shape:
+                if (!map) return;
                 if (this.extractor.options.extractShape) await this.processShape(member, map);
                 break;
             case MemberType.Xtra:
+                if (!map) return;
                 if (this.extractor.options.extractXtra) await this.processXtra(member, map);
                 break;
+            // Text and Field are strictly content, no scripts.
             case MemberType.Text:
             case MemberType.Field:
+                if (!map) return;
                 if (this.extractor.options.extractText || this.extractor.options.extractField) {
-                    await this.extractor.scriptHandler.handleScripts(member, map);
+                    await this.processText(member, map);
                 }
                 break;
             case MemberType.VectorShape:
+                if (!map) return;
                 if (this.extractor.options.extractVectorShape) await this.processVectorShape(member, map);
                 break;
             case MemberType.FilmLoop:
+                if (!map) return;
                 if (this.extractor.options.extractFilmLoop) await this.processFilmLoop(member, map);
                 break;
             case MemberType.Palette:
@@ -47,6 +56,7 @@ class MemberProcessor {
                 break;
             default:
                 if ([MemberType.Bitmap_53, MemberType.Unknown_121, MemberType.Unknown_638, MemberType.Unknown_2049].includes(member.typeId)) {
+                    if (!map) return;
                     await this.processUnknown(member, map);
                 }
                 break;
@@ -54,8 +64,8 @@ class MemberProcessor {
     }
 
     async processBitmap(member, map) {
-        const bitdId = map[Magic.BITD] || map[AfterburnerTags['DIB ']] || map[AfterburnerTags['DIB*']] ||
-            map[Magic.BITD.toLowerCase()] || map[AfterburnerTags['DIB '].toLowerCase()] || map[AfterburnerTags['DIB*'].toLowerCase()];
+
+        const bitdId = map[Magic.BITD] || map[Magic.BITD.toLowerCase()];
         if (!bitdId) return;
 
         let alphaBuf = null;
@@ -78,6 +88,19 @@ class MemberProcessor {
             const outPath = path.join(this.extractor.outputDir, `${member.name}.png`);
             const res = await this.extractor.bitmapExtractor.extract(pixels, outPath, member, palette, alphaBuf);
             if (res) member.image = path.basename(res.path);
+        }
+    }
+
+    async processText(member, map) {
+        const textId = map[Magic.STXT] || map[Magic.TEXT] || map['STXT'] || map['TEXT'];
+        if (!textId) return;
+
+        const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(textId));
+        if (data) {
+            this.extractor.log('INFO', `Extracting Text: ${member.name}`);
+            const outPath = path.join(this.extractor.outputDir, member.name);
+            const res = this.extractor.textExtractor.save(data, outPath, member);
+            if (res && res.file) member.text = res.file;
         }
     }
 
@@ -141,7 +164,7 @@ class MemberProcessor {
             };
         }
 
-        this.extractor.log('DEBUG', `Member ${member.name}: Resolved paletteId ${member.paletteId} from ${paletteSource} source (Platform: ${platform}).`);
+
         return palette;
     }
 
@@ -152,7 +175,7 @@ class MemberProcessor {
             member.palette = Color.parseDirector(data);
             if (!this.extractor.defaultMoviePalette) {
                 this.extractor.defaultMoviePalette = member.palette;
-                this.extractor.log('DEBUG', `Setting default movie palette from member ${member.name} (${member.id})`);
+
             }
             const outPath = path.join(this.extractor.outputDir, `${member.name}.pal`);
             this.extractor.paletteExtractor.save(member.palette, outPath, member);

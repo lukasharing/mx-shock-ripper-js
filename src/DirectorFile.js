@@ -1,5 +1,5 @@
 /**
- * @version 1.2.2
+ * @version 1.2.4
  * DirectorFile.js - Core logic for parsing .dcr and .cct files.
  */
 
@@ -122,9 +122,36 @@ class DirectorFile {
             await this._parseFcdr();
             await this._parseAbmp();
             await this._parseFgei();
+            await this._autoDetectEndianness();
         } catch (e) {
             this.log('ERROR', `Failed to calculate afterburned structure: ${e.message}`);
             throw e;
+        }
+    }
+
+    async _autoDetectEndianness() {
+        // Heuristic: Check Lnam or Key* chunk for sanity
+        const lnam = this.chunks.find(c => DirectorFile.unprotect(c.type) === 'Lnam');
+        if (lnam) {
+            const data = await this.getChunkData(lnam);
+            if (data && data.length >= 16) {
+                const ds = new DataStream(data, this.ds.endianness);
+                ds.readInt32(); // unk0
+                ds.readInt32(); // unk1
+                const len1 = ds.readUint32();
+                // If len1 is absurdly large relative to buffer, wrong endianness
+                if (len1 > data.length + 10000 && len1 > 0x100000) {
+                    const oldEndian = this.ds.endianness;
+                    this.ds.endianness = (oldEndian === 'big') ? 'little' : 'big';
+                    this.log('INFO', `Auto-detected endianness mismatch. Switched from ${oldEndian} to ${this.ds.endianness}.`);
+
+                    // Re-check to be sure?
+                    ds.endianness = this.ds.endianness;
+                    ds.seek(8);
+                    const len1New = ds.readUint32();
+
+                }
+            }
         }
     }
 
@@ -158,7 +185,18 @@ class DirectorFile {
             const fcdrLen = this.ds.readVarInt();
             const fcdrDecomp = zlib.inflateSync(this.ds.readBytes(fcdrLen));
             const fcdrDS = new DataStream(fcdrDecomp, this.ds.endianness);
-            fcdrDS.skip(fcdrDS.readUint16() * 16);
+            const entryCount = fcdrDS.readUint16();
+
+            for (let i = 0; i < entryCount; i++) {
+                const tag = fcdrDS.readFourCC();
+                const len = fcdrDS.readUint32();
+                const off = fcdrDS.readUint32();
+                fcdrDS.readUint32(); // Unknown/Flags
+                if (off > 0) {
+                    this.chunks.push({ type: DirectorFile.unprotect(tag), len, off, id: i });
+                }
+            }
+
         }
     }
 
@@ -172,10 +210,29 @@ class DirectorFile {
             this.ds.readVarInt();
             const abmpDecomp = zlib.inflateSync(this.ds.readBytes(abmpEnd - this.ds.position));
             const abmpDS = new DataStream(abmpDecomp, this.ds.endianness);
-            abmpDS.readVarInt();
-            abmpDS.readVarInt();
+            abmpDS.readVarInt(); // v1
+            abmpDS.readVarInt(); // v2
             const resCount = abmpDS.readVarInt();
-            this.mapAssets(abmpDS, resCount);
+
+            // Read entries with inline tags
+            for (let i = 0; i < resCount; i++) {
+                const resId = abmpDS.readVarInt();
+                const offset = abmpDS.readVarInt();
+                const compSize = abmpDS.readVarInt();
+                const uncompSize = abmpDS.readVarInt();
+                const compTypeIdx = abmpDS.readVarInt();
+                const rawTag = abmpDS.readFourCC();
+                const chunkType = DirectorFile.unprotect(rawTag);
+
+                this.chunks.push({
+                    type: chunkType,
+                    len: compSize,
+                    uncompLen: uncompSize,
+                    off: offset,
+                    id: resId,
+                    compType: compTypeIdx
+                });
+            }
         }
     }
 
@@ -192,37 +249,25 @@ class DirectorFile {
         }
     }
 
-    mapAssets(ds, count) {
-        for (let i = 0; i < count; i++) {
-            const resId = ds.readVarInt();
-            const offset = ds.readVarInt();
-            const compSize = ds.readVarInt();
-            const uncompSize = ds.readVarInt();
-            const compTypeIdx = ds.readVarInt();
-            const rawTag = ds.readFourCC();
-            const chunkType = DirectorFile.unprotect(rawTag);
-
-            this.chunks.push({
-                type: chunkType,
-                len: compSize,
-                uncompLen: uncompSize,
-                off: offset,
-                id: resId,
-                compType: compTypeIdx
-            });
-        }
-    }
-
     async loadInlineStream(ilsInfo) {
         try {
-            const ilsDS = new DataStream(zlib.inflateSync(this.ds.readBytes(ilsInfo.len)), this.ds.endianness);
+            const decomp = await this.getChunkData(ilsInfo);
+            if (!decomp) return;
+            const ilsDS = new DataStream(decomp, this.ds.endianness);
+
             while (ilsDS.position < ilsDS.buffer.length) {
                 const resId = ilsDS.readVarInt();
                 const chunkInfo = this.chunks.find(c => c.id === resId);
+
                 if (chunkInfo) {
                     if (chunkInfo.len > Limits.InternalStreamSafetyLimit) break;
+                    if (ilsDS.position + chunkInfo.len > ilsDS.buffer.length) break;
+
                     this.cachedViews[resId] = ilsDS.readBytes(chunkInfo.len);
-                } else break;
+                } else {
+                    // Abmp should be authoritative. If we hit an ID not in Abmp with unknown len, we are stuck.
+                    break;
+                }
             }
         } catch (e) {
             this.log('ERROR', `Error decompressing ILS data: ${e.message}`);
@@ -235,34 +280,24 @@ class DirectorFile {
 
         let data;
         try {
-            if (this.isAfterburned) {
+            if (this.format === 'afterburner') {
                 this.ds.seek(this.ilsBodyOffset + chunk.off);
                 const raw = this.ds.readBytes(chunk.len);
-                const isZlib = raw.length > 2 && raw[0] === 0x78 && (raw[1] === 0x9C || raw[1] === 0xDA || raw[1] === 0x01 || raw[1] === 0x5E);
-
-                if (chunk.compType === 1 || isZlib || (chunk.uncompLen > 0 && chunk.uncompLen > chunk.len)) {
+                if (chunk.compType === 1 || chunk.uncompLen > chunk.len) {
                     try {
                         data = zlib.inflateSync(raw);
                     } catch (e) {
                         try {
-                            if (raw.length > 4) {
-                                data = zlib.inflateSync(raw.slice(4));
-                            } else {
-                                throw e;
-                            }
+                            data = zlib.inflateRawSync(raw);
                         } catch (e2) {
                             try {
-                                data = zlib.inflateRawSync(raw);
-                            } catch (e3) {
-                                try {
-                                    if (raw.length > 4) {
-                                        data = zlib.inflateRawSync(raw.slice(4));
-                                    } else {
-                                        throw e3;
-                                    }
-                                } catch (e4) {
-                                    data = raw;
+                                if (raw.length > 4) {
+                                    data = zlib.inflateRawSync(raw.slice(4));
+                                } else {
+                                    throw e2;
                                 }
+                            } catch (e3) {
+                                data = raw;
                             }
                         }
                     }

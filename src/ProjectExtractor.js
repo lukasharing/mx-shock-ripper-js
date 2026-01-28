@@ -1,5 +1,5 @@
 /**
- * @version 1.2.2
+ * @version 1.2.4
  * ProjectExtractor.js - Multi-file orchestration & Global Resource Management
  * 
  * Handles the recursive discovery of linked cast libraries (.cct/.cst) and 
@@ -132,7 +132,6 @@ class ProjectExtractor {
 
             if (possibleFilename) {
                 const base = possibleFilename.replace(/\.(cst|cct|dcr|dir)$/i, '');
-                if (base === 'Habbo') continue;
 
                 let targetPath = null;
                 if (fs.existsSync(path.join(this.baseDir, base + '.cct'))) targetPath = path.join(this.baseDir, base + '.cct');

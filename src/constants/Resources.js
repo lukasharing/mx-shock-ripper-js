@@ -1,5 +1,5 @@
 /**
- * @version 1.2.2
+ * @version 1.2.4
  * Resources.js - Display labels and file extension mapping
  */
 

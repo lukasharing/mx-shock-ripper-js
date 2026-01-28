@@ -39,14 +39,39 @@ class MetadataManager {
         }
 
         let headerSize = firstWord === 12 ? 12 : 20;
+
+        // Safety check: if buffer is too small for 20-byte header, downgrade to 12 (or abort if too small for 12)
+        if (headerSize === 20 && data.length < 20) {
+
+            headerSize = 12;
+        }
+        if (data.length < 12) {
+
+            return;
+        }
+
         let usedCount;
 
         if (headerSize === 12) {
+            ds.seek(4); // Skip firstWord(2) + 2 bytes padding/version?
+            // Actually lines 45-47: ds.readUint16(); ds.readUint32(); usedCount = ds.readUint32();
+            // Original code:
+            // if (headerSize === 12) {
+            //     ds.readUint16(); // 2 bytes (pos 2->4)
+            //     ds.readUint32(); // 4 bytes (pos 4->8)
+            //     usedCount = ds.readUint32(); // 4 bytes (pos 8->12)
+            // }
+            // Since we read firstWord (2 bytes) at line 27, ds is at 2.
             ds.readUint16();
             ds.readUint32();
             usedCount = ds.readUint32();
         } else {
             ds.seek(12);
+            // Check bounds before read
+            if (ds.position + 4 > data.length) {
+
+                return;
+            }
             ds.readUint32();
             usedCount = ds.readUint32();
         }
@@ -57,9 +82,10 @@ class MetadataManager {
             const sectionID = ds.readInt32();
             const castID = ds.readInt32();
             const tag = ds.readFourCC();
+            const normalizedTag = DirectorFile.unprotect(tag);
 
             if (!this.keyTable[castID]) this.keyTable[castID] = {};
-            this.keyTable[castID][tag] = sectionID;
+            this.keyTable[castID][normalizedTag] = sectionID;
             this.resToMember[sectionID] = castID;
         }
 
@@ -100,7 +126,7 @@ class MetadataManager {
         const lnam = this.extractor.dirFile.chunks.find(c => c.type === Magic.LNAM || c.type === AfterburnerTags.manL);
         if (lnam) {
             const data = await this.extractor.dirFile.getChunkData(lnam);
-            if (data) this.nameTable = this.extractor.lnamParser.parse(data);
+            if (data) this.nameTable = this.extractor.lnamParser.parse(data, this.extractor.dirFile.ds.endianness);
         }
     }
 

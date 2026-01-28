@@ -10,10 +10,10 @@ class ScriptHandler {
     async handleScripts(member, memberKey) {
         if (!this.extractor.options.extractScript) return;
 
-        const { text, source: textSource } = await this._resolveScriptText(member, memberKey);
+        const { text, source: textSource } = await this._resolveScriptSource(member, memberKey);
 
         if (text && text.trim() && member.typeId !== MemberType.Script) {
-            this.extractor.log('DEBUG', `Member ${member.name}: Saving script from ${textSource} chunk source.`);
+
             const outPath = path.join(this.extractor.outputDir, `${member.name}`);
             const res = this.extractor.scriptExtractor.save(text, outPath, member);
             if (res) {
@@ -31,17 +31,25 @@ class ScriptHandler {
         const { lscrId, source: lscrSource } = this._resolveLscrChunk(member, potentialKeys);
 
         if (lscrId) {
-            await this._decompileLscr(lscrId, lscrSource, member);
+            const decompiled = await this._decompileLscr(lscrId, lscrSource, member);
+            // If decompilation failed (contains error marker) and it's a Text/Field member,
+            // assume the script is irrelevant/garbage and don't attach it to the member metadata.
+            if (decompiled && decompiled.includes('[DECOMPILE ERROR') && (member.typeId === MemberType.Text || member.typeId === MemberType.Field)) {
+                this.extractor.log('WARNING', `Member ID ${member.id} (${member.name}): Ignoring failed decompilation for Text member.`);
+                delete member.scriptFile; // Remove the ref if _decompileLscr set it
+            }
         } else if (member.typeId === MemberType.Script) {
             this.extractor.log('WARNING', `Member ID ${member.id} (Script): No script chunks found.`);
         }
     }
 
-    async _resolveScriptText(member, memberKey) {
+    async _resolveScriptSource(member, memberKey) {
         let text = member.scriptText;
         let source = text ? 'Member Metadata' : null;
 
-        if (!text) {
+        // ONLY Script members treat STXT/TEXT chunks as source code.
+        // For Text/Field members, these chunks are content (handled by TextExtractor).
+        if (!text && member.typeId === MemberType.Script) {
             const potentialKeys = [memberKey];
             if (member.scriptId > 0 && this.extractor.metadataManager.keyTable[member.scriptId])
                 potentialKeys.push(this.extractor.metadataManager.keyTable[member.scriptId]);

@@ -26,5 +26,4 @@ The `BitmapExtractor` follows a deterministic approach to identify image dimensi
 
 ## Special Cases
 
-- **Habbo 8208 (0x2010)**: A frequent edge case in Habbo Hotel assets where 8-bit indexed images are marked with a specific flag.
 - **Planar Reconstruction**: Handles both interleaved (row-by-row) and stacked (plane-by-plane) pixel distributions for high-depth assets.

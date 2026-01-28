@@ -1,5 +1,5 @@
 /**
- * @version 1.2.2
+ * @version 1.2.4
  * CastMember.js - Metadata & geometric state for a single Cast Member
  * 
  * This class encapsulates the dual-nature of Director resources: the standardized 

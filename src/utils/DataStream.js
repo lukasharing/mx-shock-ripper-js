@@ -1,5 +1,5 @@
 /**
- * @version 1.2.2
+ * @version 1.2.4
  * DataStream.js - High-performance binary abstraction for Adobe Director assets
  * 
  * Provides a stateful wrapper over Node.js Buffers with support for runtime 

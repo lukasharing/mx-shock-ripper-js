@@ -1,5 +1,5 @@
 /**
- * @version 1.2.2
+ * @version 1.2.4
  * Afterburner.js - Normalization map for protected FourCC tags
  */
 
