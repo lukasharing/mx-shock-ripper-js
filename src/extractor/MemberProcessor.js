@@ -1,0 +1,229 @@
+const fs = require('fs');
+const path = require('path');
+const Color = require('../utils/Color');
+const { MemberType, Magic, AfterburnerTags } = require('../Constants');
+
+class MemberProcessor {
+    constructor(extractor) {
+        this.extractor = extractor;
+    }
+
+    async processMemberContent(member, chunk) {
+        const map = this.extractor.metadataManager.keyTable[member.id];
+        if (this.extractor.options.extractScript) await this.extractor.scriptHandler.handleScripts(member, map);
+
+        if (!map) return;
+
+        switch (member.typeId) {
+            case MemberType.Bitmap:
+                if (this.extractor.options.extractBitmap) await this.processBitmap(member, map);
+                break;
+            case MemberType.Sound:
+                if (this.extractor.options.extractSound) await this.processSound(member, map);
+                break;
+            case MemberType.Font:
+                if (this.extractor.options.extractFont) await this.processFont(member, map);
+                break;
+            case MemberType.Shape:
+                if (this.extractor.options.extractShape) await this.processShape(member, map);
+                break;
+            case MemberType.Xtra:
+                if (this.extractor.options.extractXtra) await this.processXtra(member, map);
+                break;
+            case MemberType.Text:
+            case MemberType.Field:
+                if (this.extractor.options.extractText || this.extractor.options.extractField) {
+                    await this.extractor.scriptHandler.handleScripts(member, map);
+                }
+                break;
+            case MemberType.VectorShape:
+                if (this.extractor.options.extractVectorShape) await this.processVectorShape(member, map);
+                break;
+            case MemberType.FilmLoop:
+                if (this.extractor.options.extractFilmLoop) await this.processFilmLoop(member, map);
+                break;
+            case MemberType.Palette:
+                // Palettes are processed separately in the main loop to ensure they are ready for bitmaps
+                break;
+            default:
+                if ([MemberType.Bitmap_53, MemberType.Unknown_121, MemberType.Unknown_638, MemberType.Unknown_2049].includes(member.typeId)) {
+                    await this.processUnknown(member, map);
+                }
+                break;
+        }
+    }
+
+    async processBitmap(member, map) {
+        const bitdId = map[Magic.BITD] || map[AfterburnerTags['DIB ']] || map[AfterburnerTags['DIB*']] ||
+            map[Magic.BITD.toLowerCase()] || map[AfterburnerTags['DIB '].toLowerCase()] || map[AfterburnerTags['DIB*'].toLowerCase()];
+        if (!bitdId) return;
+
+        let alphaBuf = null;
+        if (map[Magic.ALFA]) {
+            const alfa = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(map[Magic.ALFA]));
+            if (alfa) {
+                const expected = (member.width || 1) * (member.height || 1);
+                alphaBuf = (alfa.length < expected) ? this.extractor.bitmapExtractor.decompressPackBits(alfa, expected) : alfa;
+            }
+        }
+
+        let palette = null;
+        if (this.extractor.options.colored) {
+            palette = this.resolvePalette(member);
+        }
+
+        const pixels = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(bitdId));
+        if (pixels) {
+            this.extractor.log('INFO', `Extracting Bitmap: ${member.name} (${member.width}x${member.height})`);
+            const outPath = path.join(this.extractor.outputDir, `${member.name}.png`);
+            const res = await this.extractor.bitmapExtractor.extract(pixels, outPath, member, palette, alphaBuf);
+            if (res) member.image = path.basename(res.path);
+        }
+    }
+
+    resolvePalette(member) {
+        let palette = null;
+        let paletteSource = "unknown";
+
+        // 1. Internal Palettes (Same cast)
+        const internalPal = this.extractor.members.find(m => m.id === member.paletteId && m.typeId === MemberType.Palette);
+        if (internalPal?.palette) {
+            palette = internalPal.palette;
+            paletteSource = "internal";
+            member.palette = { id: internalPal.id, name: internalPal.name, castlib: "internal" };
+        }
+
+        // 2. Project Context (Main movie or discovered casts)
+        if (!palette && this.extractor.options.projectContext) {
+            const globalEntry = this.extractor.options.projectContext.globalPalettes.find(p => p.id === member.paletteId || p.id === String(member.paletteId));
+            if (globalEntry) {
+                palette = globalEntry.colors;
+                paletteSource = "project";
+                member.palette = { id: globalEntry.id, name: globalEntry.name, castlib: globalEntry.source ? path.parse(globalEntry.source).name : "unknown" };
+            }
+        }
+
+        // 3. Shared Palettes (shared_palettes.json)
+        if (!palette && (this.extractor.sharedPalettes[member.paletteId] || this.extractor.sharedPalettes[String(member.paletteId)])) {
+            const shared = this.extractor.sharedPalettes[member.paletteId] || this.extractor.sharedPalettes[String(member.paletteId)];
+            palette = shared.colors || shared;
+            paletteSource = "shared_json";
+            member.palette = { id: member.paletteId, name: shared.name || `shared_${member.paletteId}`, castlib: "shared" };
+        }
+
+        // 4. Default Movie Palette / Fallbacks
+        if (!palette) {
+            if (member.paletteId === 0) {
+                palette = this.extractor.defaultMoviePalette || Color.getMacSystem7();
+                paletteSource = "default_movie";
+                member.palette = { id: 0, name: "SystemMac", castlib: "system" };
+            } else if (member.paletteId === -1) {
+                palette = Color.getWindowsSystem();
+                paletteSource = "system_windows";
+                member.palette = { id: -1, name: "SystemWin", castlib: "system" };
+            } else {
+                palette = Color.getMacSystem7();
+                paletteSource = "fallback_system";
+                member.palette = { id: member.paletteId, name: "SystemMac", castlib: "system" };
+            }
+        }
+
+        this.extractor.log('DEBUG', `Member ${member.name}: Resolved paletteId ${member.paletteId} from ${paletteSource} source.`);
+        return palette;
+    }
+
+    async processPalette(member, map) {
+        const id = map?.[Magic.CLUT] || map?.[Magic.CLUT.toLowerCase()] || member.id;
+        const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(id));
+        if (data) {
+            member.palette = Color.parseDirector(data);
+            if (!this.extractor.defaultMoviePalette) {
+                this.extractor.defaultMoviePalette = member.palette;
+                this.extractor.log('DEBUG', `Setting default movie palette from member ${member.name} (${member.id})`);
+            }
+            const outPath = path.join(this.extractor.outputDir, `${member.name}.pal`);
+            this.extractor.paletteExtractor.save(member.palette, outPath, member);
+        }
+    }
+
+    async processSound(member, map) {
+        const sndId = map[Magic.SND] || map[Magic.SND.toLowerCase()] || map[AfterburnerTags['SND*']] || map[AfterburnerTags['SND*'].toLowerCase()];
+        if (!sndId) return;
+        const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(sndId));
+        if (data) {
+            const outPath = path.join(this.extractor.outputDir, member.name);
+            this.extractor.soundExtractor.save(data, outPath, member);
+        }
+    }
+
+    async processFont(member, map) {
+        const fontId = map[Magic.VWFT] || map[Magic.FONT] || map['VWFT'] || map['FONT'];
+        if (!fontId) return;
+        const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(fontId));
+        if (data) {
+            const outPath = path.join(this.extractor.outputDir, member.name);
+            this.extractor.fontExtractor.save(data, outPath);
+        }
+    }
+
+    async processShape(member, map) {
+        let palette = this.resolvePalette(member) || Color.getMacSystem7();
+        this.extractor.log('INFO', `Extracting Shape: ${member.name}`);
+        const outPath = path.join(this.extractor.outputDir, member.name);
+        this.extractor.shapeExtractor.save(outPath, member, palette);
+    }
+
+    async processXtra(member, map) {
+        const xtraId = map[Magic.XTRA] || map[Magic.XTRA.toLowerCase()] || map[Magic.XTRA.toUpperCase()];
+        if (!xtraId) return;
+        const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(xtraId));
+        if (data) {
+            const outPath = path.join(this.extractor.outputDir, `${member.name}.xtra`);
+            this.extractor.genericExtractor.save(data, outPath);
+        }
+    }
+
+    async processVectorShape(member, map) {
+        let dataId = 0;
+        if (map) {
+            const keys = Object.keys(map);
+            const dataKey = keys.find(k => !['CASt', 'KEY*', 'Lscr'].includes(k));
+            if (dataKey) dataId = map[dataKey];
+        }
+        if (!dataId) return;
+        const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(dataId));
+        if (data) {
+            const outPath = path.join(this.extractor.outputDir, member.name);
+            this.extractor.vectorShapeExtractor.save(data, outPath, member);
+        }
+    }
+
+    async processFilmLoop(member, map) {
+        let dataId = 0;
+        if (map) dataId = map[Magic.SCORE] || map[Magic.VWSC] || map['Score'] || map['VWSC'];
+        if (!dataId) return;
+        const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(dataId));
+        if (data) {
+            const outPath = path.join(this.extractor.outputDir, member.name);
+            this.extractor.movieExtractor.save(data, outPath, member);
+        }
+    }
+
+    async processUnknown(member, map) {
+        this.extractor.log('WARNING', `Processing Unknown Member ID ${member.id} (Type: ${member.typeId})...`);
+        if (!map) return;
+        const keys = Object.keys(map);
+        for (const tag of keys) {
+            const chunkId = map[tag];
+            const data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(chunkId));
+            if (data) {
+                const dumpPath = path.join(this.extractor.outputDir, `unknown_${member.typeId}_${member.id}_${tag.replace(/[^a-zA-Z0-9]/g, '_')}.hex`);
+                const binPath = path.join(this.extractor.outputDir, `unknown_${member.typeId}_${member.id}_${tag.replace(/[^a-zA-Z0-9]/g, '_')}.bin`);
+                fs.writeFileSync(dumpPath, data.toString('hex'));
+                fs.writeFileSync(binPath, data);
+            }
+        }
+    }
+}
+
+module.exports = MemberProcessor;

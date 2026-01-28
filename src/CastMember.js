@@ -1,6 +1,6 @@
 /**
- * @version 1.2.1
- * CastMember.js - Archetypal model for Adobe Director resources
+ * @version 1.2.2
+ * CastMember.js - Metadata & geometric state for a single Cast Member
  * 
  * This class encapsulates the dual-nature of Director resources: the standardized 
  * metadata (Common Info) and the type-specific binary payload (Spec). 
@@ -45,7 +45,7 @@ class CastMember {
         this.width = properties.width || 0;
         this.height = properties.height || 0;
         this.scriptFile = null;
-        this.paletteFile = null;
+        this.palette = properties.palette || null;
         this.checksum = properties.checksum || null;
 
         // Shape specifics
@@ -234,7 +234,7 @@ class CastMember {
             modified: this.modified,
             flags: this.flags,
             scriptFile: this.scriptFile,
-            paletteFile: this.paletteFile,
+            palette: (this.palette && !Array.isArray(this.palette)) ? this.palette : undefined,
             shapeType: this.shapeType,
             pattern: this.pattern,
             foreColor: this.foreColor,

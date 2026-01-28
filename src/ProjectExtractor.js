@@ -1,6 +1,6 @@
 /**
- * @version 1.2.1
- * ProjectExtractor.js - Strategic orchestrator for multi-movie Director projects
+ * @version 1.2.2
+ * ProjectExtractor.js - Multi-file orchestration & Global Resource Management
  * 
  * Handles the recursive discovery of linked cast libraries (.cct/.cst) and 
  * manages the global resource context (Shared Palettes, Shared Scripts) to 
@@ -158,7 +158,7 @@ class ProjectExtractor {
         for (const cast of this.loadedCasts) {
             for (const clut of cast.cluts) {
                 const colors = this.parseRawColors(clut.data);
-                if (colors) this.globalPalettes.push({ colors, name: clut.name, source: clut.source });
+                if (colors) this.globalPalettes.push({ id: clut.id, colors, name: clut.name, source: clut.source });
             }
         }
     }
@@ -190,9 +190,8 @@ class ProjectExtractor {
         return colors.length > 0 ? colors : null;
     }
 
-    getPalette(index) {
-        const entry = this.globalPalettes[index - 1];
-        return entry ? entry.colors : null;
+    getPalette(id) {
+        return this.globalPalettes.find(p => p.id === id || p.id === String(id))?.colors;
     }
 
     getDefaultPalette() {

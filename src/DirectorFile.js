@@ -1,15 +1,16 @@
 /**
- * @version 1.2.1
+ * @version 1.2.2
  * DirectorFile.js - Core logic for parsing .dcr and .cct files.
  */
 
+const fs = require('fs');
 const zlib = require('zlib');
 const DataStream = require('./utils/DataStream');
 const { Magic, AfterburnerTags, Limits } = require('./Constants');
 
 class DirectorFile {
     constructor(buffer, logger) {
-        this.ds = new DataStream(buffer);
+        this.ds = buffer ? new DataStream(buffer) : null;
         this.log = logger || ((lvl, msg) => console.log(`[DirectorFile][${lvl}] ${msg}`));
         this.chunks = [];
         this.cachedViews = {};
@@ -18,6 +19,19 @@ class DirectorFile {
         this.format = 'unknown';
         this.fmap = null;
         this.subtype = null;
+    }
+
+    async open(filePath) {
+        if (!fs.existsSync(filePath)) return false;
+        try {
+            const buffer = fs.readFileSync(filePath);
+            this.ds = new DataStream(buffer);
+            await this.parse();
+            return true;
+        } catch (e) {
+            this.log('ERROR', `Failed to open file: ${e.message}`);
+            return false;
+        }
     }
 
     getChunkById(id) {
@@ -270,25 +284,7 @@ class DirectorFile {
 
     static unprotect(tag) {
         if (!tag) return tag;
-        const tagMap = {
-            'pami': 'imap',   // Protected Initial Map
-            'pamm': 'mmap',   // Protected Memory Map
-            '*YEK': 'KEY*',   // Protected Key Table (byte-swapped)
-            'YEK*': 'KEY*',   // Protected Key Table
-            'Lscl': 'MCsL',   // Movie Cast Script List (protected)
-            'XtcL': 'LctX',   // Lingo Script Text/Context (protected)
-            'manL': 'Lnam',   // Lingo Name Table (protected)
-            'rcsL': 'Lscr',   // Lingo Compiled Script (protected)
-            'CAS*': 'CASt',   // Cast Member Data (protected)
-            'snd ': 'SND ',    // Sound Data (protected/lowercase)
-            'DIB ': 'BITD',    // Bitmap Data (Shockwave 32-bit)
-            'DIB*': 'BITD',    // Bitmap Data (Shockwave 32-bit alternate)
-            'ediM': 'medi',    // Media (Shockwave)
-            'SND ': 'snd ',    // Sound (Shockwave)
-            'muhT': 'Thum',    // Thumbnail (Shockwave)
-            'STG ': 'Grid'     // Grid (Shockwave)
-        };
-        return tagMap[tag] || tag;
+        return AfterburnerTags[tag] || tag;
     }
 }
 

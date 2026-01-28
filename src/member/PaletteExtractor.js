@@ -1,10 +1,10 @@
-/** @version 1.2.1 - Generic Director Asset Ripper */
+/** @version 1.2.2 - Generic Director Asset Ripper */
 const DataStream = require('../utils/DataStream');
 const GenericExtractor = require('./GenericExtractor');
 const { Resources: { Labels } } = require('../Constants');
 
 /**
- * @version 1.2.1
+ * @version 1.2.2
  * PaletteExtractor - Handles parsing and formatting of Director palette (CLUT) assets.
  * 
  * See docs/doc/09_PaletteExtraction.md for technical details.

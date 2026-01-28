@@ -1,5 +1,5 @@
 /**
- * @version 1.2.1
+ * @version 1.2.2
  * Afterburner.js - Normalization map for protected FourCC tags
  */
 
@@ -20,9 +20,12 @@ module.exports = {
     'CAS*': 'CASt', // Protected CASt
     'snd ': 'SND ', // Lowercase Sound
     'DIB ': 'BITD', // Device Independent Bitmap
-    'DIB ': 'BITD', // Device Independent Bitmap
     'DIB*': 'BITD', // Alternate DIB
     'SND*': 'SND ', // Protected Sound
     'PMBA': 'Abmp', // Protected Abmp
-    'IEGF': 'FGEI'  // Protected FGEI
+    'IEGF': 'FGEI', // Protected FGEI
+    'ediM': 'medi', // Media (Shockwave)
+    'SND ': 'snd ', // Sound (Shockwave)
+    'muhT': 'Thum', // Thumbnail (Shockwave)
+    'STG ': 'Grid'  // Grid (Shockwave)
 };
