@@ -5,6 +5,7 @@ const CCTExtractor = require('./src/CCTExtractor');
 const ProjectExtractor = require('./src/ProjectExtractor');
 const LingoDecompiler = require('./src/lingo/LingoDecompiler');
 const Constants = require('./src/Constants');
+const { Color, PALETTES } = require('./src/utils/Color');
 
 module.exports = {
     DirectorFile,
@@ -13,5 +14,7 @@ module.exports = {
     CCTExtractor,
     ProjectExtractor,
     LingoDecompiler,
-    Constants
+    Constants,
+    Color,
+    PALETTES
 };
