@@ -1,5 +1,5 @@
 /**
- * @version 1.2.5
+ * @version 1.2.7
  * CCTExtractor.js - Standalone Cast Library extraction utility
  * 
  * Simple orchestrator for processing .cct or .cst files. Leverages 

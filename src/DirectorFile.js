@@ -1,5 +1,5 @@
 /**
- * @version 1.2.5
+ * @version 1.2.7
  * DirectorFile.js - Core logic for parsing .dcr and .cct files.
  */
 

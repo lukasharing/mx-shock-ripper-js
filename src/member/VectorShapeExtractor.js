@@ -1,5 +1,5 @@
 /**
- * @version 1.2.5
+ * @version 1.2.7
  * VectorShapeExtractor.js - Extraction logic for Vector Shape members (Type 18)
  */
 
