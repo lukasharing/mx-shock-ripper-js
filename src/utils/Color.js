@@ -1,5 +1,5 @@
 /**
- * @version 1.2.0
+ * @version 1.2.1
  * Color.js - Palette and Color management for Director Assets
  * 
  * Provides reference implementations of the standard Adobe Director 
@@ -50,18 +50,39 @@ const PALETTES = {
 
 class Color {
     /**
-     * Parses a 1536-byte raw CLUT palette (2 bytes per channel).
+     * Parses a raw CLUT palette. Supports multiple formats:
+     * - 768 bytes: 8-bit RGB (3 bytes per entry)
+     * - 1024 bytes: 8-bit RGB + Alpha/Skip (4 bytes per entry)
+     * - 1536 bytes: 16-bit RGB (6 bytes per entry, divide by 256)
      */
     static parseDirector(buffer) {
-        if (!buffer || buffer.length < 1536) return PALETTES.MAC;
+        if (!buffer) return PALETTES.MAC;
+
         const palette = [];
-        for (let i = 0; i < 256; i++) {
-            const offset = i * 6;
-            const r = buffer.readUInt16BE(offset);
-            const g = buffer.readUInt16BE(offset + 2);
-            const b = buffer.readUInt16BE(offset + 4);
-            palette.push([r >> 8, g >> 8, b >> 8]);
+        const len = buffer.length;
+
+        if (len >= 1536) { // 16-bit RGB (6 bytes per entry)
+            for (let i = 0; i < 256; i++) {
+                const offset = i * 6;
+                const r = buffer.readUInt16BE(offset);
+                const g = buffer.readUInt16BE(offset + 2);
+                const b = buffer.readUInt16BE(offset + 4);
+                palette.push([r >> 8, g >> 8, b >> 8]);
+            }
+        } else if (len >= 1024) { // 8-bit RGB + Skip (4 bytes per entry)
+            for (let i = 0; i < 256; i++) {
+                const offset = i * 4;
+                palette.push([buffer[offset], buffer[offset + 1], buffer[offset + 2]]);
+            }
+        } else if (len >= 768) { // 8-bit RGB (3 bytes per entry)
+            for (let i = 0; i < 256; i++) {
+                const offset = i * 3;
+                palette.push([buffer[offset], buffer[offset + 1], buffer[offset + 2]]);
+            }
+        } else {
+            return PALETTES.MAC;
         }
+
         return palette;
     }
 

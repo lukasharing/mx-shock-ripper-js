@@ -1,5 +1,5 @@
 /**
- * @version 1.2.0
+ * @version 1.2.1
  * LingoDecompiler.js
  * 
  * High-performance Lingo bytecode decompiler using a multi-phase 
@@ -21,7 +21,7 @@ const { LingoConfig, LingoOpcode } = require('../Constants');
 class LingoStack {
     constructor() { this._items = []; }
     push(item) { this._items.push(item); }
-    pop() { return this._items.length > 0 ? this._items.pop() : null; }
+    pop() { return this._items.length > 0 ? this._items.pop() : new AST.ERROR("Stack Underflow"); }
     peek() { return this._items.length > 0 ? this._items[this._items.length - 1] : null; }
     splice(start, count) { return this._items.splice(start, count); }
     get length() { return this._items.length; }

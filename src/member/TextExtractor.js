@@ -1,5 +1,5 @@
 /**
- * @version 1.2.0
+ * @version 1.2.1
  * TextExtractor.js - Extraction logic for Director Text and Field members
  * 
  * Handles STXT and TEXT chunks. Exports as RTF to preserve potential formatting 

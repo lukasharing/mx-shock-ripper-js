@@ -1,5 +1,5 @@
 /**
- * @version 1.2.0
+ * @version 1.2.1
  * CastMember.js - Archetypal model for Adobe Director resources
  * 
  * This class encapsulates the dual-nature of Director resources: the standardized 
@@ -35,7 +35,7 @@ class CastMember {
 
         // Metadata & Flags
         this.flags = properties.flags || 0;
-        this.paletteId = properties.paletteId || 0;
+        this.paletteId = properties.paletteId !== undefined ? properties.paletteId : 0;
         this.created = properties.created || null;
         this.modified = properties.modified || null;
         this.comment = properties.comment || null;

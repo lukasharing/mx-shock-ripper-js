@@ -1,5 +1,5 @@
 /**
- * @version 1.2.0
+ * @version 1.2.1
  * SoundExtractor.js - Handles extraction and conversion of Director 
  * sound (SND) assets. Supports SWA, MP3, and standard PCM.
  */
@@ -104,37 +104,35 @@ class SoundExtractor extends GenericExtractor {
             // Handle Format 1 (Standard)
             if (format === 1) {
                 const dataTypeCount = ds.readUint16();
-                if (dataTypeCount < 1 || dataTypeCount > 10) return meta; // Sanity check
+                if (dataTypeCount < 1 || dataTypeCount > 10) return meta;
 
-                // Read Data Types (Codecs)
                 for (let i = 0; i < dataTypeCount; i++) {
-                    const dataFormatID = ds.readUint32(); // FourCC
+                    const dataFormatID = ds.readUint32();
                     ds.readUint32(); // initOption
-
                     if (dataFormatID === SoundCodecs.IMA4) meta.format = 'ima4';
-                    else if (dataFormatID === SoundCodecs.TWOS) meta.format = 'twos'; // 16-bit
-                    else if (dataFormatID === SoundCodecs.RAW) meta.format = 'raw';   // 8-bit
+                    else if (dataFormatID === SoundCodecs.TWOS) meta.format = 'twos';
+                    else if (dataFormatID === SoundCodecs.RAW) meta.format = 'raw';
                     else if (dataFormatID === SoundCodecs.MAC3 || dataFormatID === SoundCodecs.MAC6) meta.format = 'mace';
                 }
             } else if (format === 2) {
                 ds.readUint16(); // refCount
             } else {
-                return meta; // Not a valid snd
+                return meta;
             }
 
-            // Parse Commands (SoundCommandCount)
+            // Parse Commands
             const cmdCount = ds.readUint16();
-            ds.skip(cmdCount * 8); // Skip commands (cmd: 2, param1: 2, param2: 4)
+            ds.skip(cmdCount * 8);
 
-            // Parse Sound Header Record unless EOF
+            // Parse Sound Header Record
             if (ds.position + 22 <= ds.byteLength) {
                 ds.readUint32(); // samplePtr
-                ds.readUint32(); // headerEncode (OR reserved)
+                const encodeDependent = ds.readUint32(); // headerEncode OR numChannels (if extended)
 
                 // Fixed Point 16.16 Sample Rate
                 const srHi = ds.readUint16();
-                const srLo = ds.readUint16(); // fraction
-                meta.sampleRate = srHi; // Ignore fraction for standard extraction
+                const srLo = ds.readUint16();
+                meta.sampleRate = srHi;
 
                 ds.readUint32(); // loopStart
                 ds.readUint32(); // loopEnd
@@ -142,42 +140,65 @@ class SoundExtractor extends GenericExtractor {
                 const encode = ds.readUint8();
                 ds.readUint8(); // baseFrequency
 
-                // Extended Header Detection
                 if (encode === 0xFF || encode === 0xFD) {
                     // Extended Sound Header
+                    // encodeDependent = numChannels in this case (from ProjectorRays logic/Mac specs)
+                    meta.numChannels = encodeDependent;
+
                     ds.readUint32(); // numSamples
-                    ds.skip(10); // AIFFSampleRate (80-bit float) or similar
+                    ds.skip(10); // AIFFSampleRate
                     ds.skip(12); // marker, instrument, AES
 
-                    meta.numChannels = ds.readUint32();
-                    meta.sampleSize = ds.readUint16();
-                    // ... future use fields
+                    meta.sampleSize = ds.readUint16(); // 16-bit
+                    ds.skip(14); // futureUse1(2), futureUse2(4), futureUse3(4), futureUse4(4)
+
+                    // Director Specific: count of samples to skip (often for encoder delay)
+                    const skipSamples = ds.readUint32();
+
+                    // If we successfully parsed this far, and we haven't identified a codec yet,
+                    // valid extended headers often imply compressed data (like MP3/SWA) in Director context.
+                    // Let's verify by checking if data follows.
+                    if (ds.position < ds.byteLength) {
+                        // Check for MP3 Sync right here
+                        if (meta.format === 'unknown') {
+                            const sync = this.findMP3Sync(ds.buffer.slice(ds.position, ds.position + 128));
+                            if (sync !== -1) {
+                                meta.format = 'mp3';
+                                meta.offset = ds.position + sync;
+                            } else {
+                                // Fallback: If no sync found, but it was a valid extended header, 
+                                // it might be raw PCM if sampleSize/Rate are sane.
+                                // But usually 0xFF encode implies compressed.
+                                meta.offset = ds.position;
+                            }
+                        } else {
+                            meta.offset = ds.position;
+                        }
+                    }
                 } else if (encode === 0) {
                     // Standard Sound Header
                     meta.numChannels = 1;
                     meta.sampleSize = 8;
+                    meta.offset = ds.position;
+                } else {
+                    // Unhandled encode
                 }
 
-                // If MP3/SWA is embedded in 'snd ' (common in Director 6+ compressed)
-                // it might not obey the 'encode' flag strictly, but rely on 'ima4' or just raw data.
-                // Scan for MP3 sync if not ima4
-                if (meta.format !== 'ima4') {
-                    // Peek ahead for MP3 sync
-                    const currentPos = ds.position;
-                    // Usually data starts here or after a few null bytes
-                    const sync = this.findMP3Sync(ds.buffer.slice(currentPos, currentPos + 128));
-                    if (sync !== -1) {
-                        meta.format = 'mp3';
-                        meta.offset = currentPos + sync;
-                        return meta;
+                // General MP3 scan fallback if still unknown (for safety)
+                if (meta.format === 'unknown' || meta.format === 'ima4') {
+                    const currentPos = (meta.offset > 0) ? meta.offset : ds.position;
+                    // Only scan if we have enough data left
+                    if (currentPos < ds.byteLength) {
+                        const sync = this.findMP3Sync(ds.buffer.slice(currentPos, currentPos + 128));
+                        if (sync !== -1) {
+                            meta.format = 'mp3';
+                            meta.offset = currentPos + sync;
+                        }
                     }
                 }
-
-                meta.offset = ds.position;
             }
-
         } catch (e) {
-            // Ignore parse errors, fallback to raw
+            // Ignore parse errors
         }
 
         return meta;

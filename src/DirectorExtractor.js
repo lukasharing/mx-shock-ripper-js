@@ -1,5 +1,5 @@
 /**
- * @version 1.2.0
+ * @version 1.2.1
  * DirectorExtractor.js - Strategic extraction orchestrator for Adobe Director assets
  * 
  * Coordinates the high-level extraction workflow, managing 
@@ -92,6 +92,7 @@ class DirectorExtractor {
         this.nameTable = {};
         this.lctxMap = {};
         this.sharedPalettes = {};
+        this.defaultMoviePalette = null;
     }
 
     /**
@@ -604,9 +605,11 @@ class DirectorExtractor {
 
         let palette = null;
         if (this.options.colored) {
-            if (member.paletteId === 0) palette = Color.getMacSystem7();
-            else if (member.paletteId === -1) palette = Color.getWindowsSystem();
-            else if (member.paletteId > 0) {
+            if (member.paletteId === 0) {
+                palette = this.defaultMoviePalette || Color.getMacSystem7();
+            } else if (member.paletteId === -1) {
+                palette = Color.getWindowsSystem();
+            } else if (member.paletteId > 0) {
                 // Resolved from global shared palettes or internal CLUTs
                 const shared = this.sharedPalettes[member.paletteId] || this.sharedPalettes[String(member.paletteId)];
                 if (shared) {
@@ -632,6 +635,10 @@ class DirectorExtractor {
         const data = await this.dirFile.getChunkData(this.dirFile.getChunkById(id));
         if (data) {
             member.palette = Color.parseDirector(data);
+            if (!this.defaultMoviePalette) {
+                this.defaultMoviePalette = member.palette;
+                this.log('DEBUG', `Setting default movie palette from member ${member.name} (${member.id})`);
+            }
             const outPath = path.join(this.outputDir, `${member.name}.pal`);
             this.paletteExtractor.save(member.palette, outPath, member);
         }
@@ -727,6 +734,17 @@ class DirectorExtractor {
                 fs.writeFileSync(dumpPath, hexDump);
                 fs.writeFileSync(binPath, data);
             }
+        }
+    }
+
+    async loadSharedPalettes(filePath) {
+        try {
+            const data = fs.readFileSync(filePath, 'utf8');
+            const json = JSON.parse(data);
+            this.sharedPalettes = json;
+            this.log('SUCCESS', `Loaded ${Object.keys(json).length} shared palettes from ${path.basename(filePath)}`);
+        } catch (e) {
+            this.log('ERROR', `Failed to load shared palettes: ${e.message}`);
         }
     }
 

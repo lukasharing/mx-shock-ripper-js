@@ -16,7 +16,7 @@ const BitDepth = {
 if (!Alpha.BytesPerPixel) Alpha.BytesPerPixel = 4;
 
 /**
- * @version 1.2.0
+ * @version 1.2.1
  * BitmapExtractor - Deterministic Shockwave Director bitmap (BITD) 
  * parsing and PNG conversion.
  * 
@@ -101,6 +101,10 @@ class BitmapExtractor extends GenericExtractor {
         const chunky = Buffer.alloc(width * height * Alpha.BytesPerPixel);
         const ds = new DataStream(pixelData, 'big');
         const readSafe = () => (ds.position < pixelData.length) ? ds.readUint8() : 0;
+
+        // Use Color.getGrayscale() if palette is missing and depth is 8
+        const effectivePalette = (depth === 8 && (!palette || palette.length === 0)) ? this.palettes.getGrayscale() : palette;
+
         for (let y = 0; y < height; y++) {
             ds.seek(y * (rowBytes || Math.ceil((width * depth) / BitDepth.BitsPerByte)));
             for (let x = 0; x < width; x++) {
@@ -109,21 +113,21 @@ class BitmapExtractor extends GenericExtractor {
                     const bytePos = (y * rowBytes) + Math.floor(x / 8);
                     const byteVal = (bytePos < pixelData.length) ? pixelData[bytePos] : 0;
                     const val = (byteVal >> (7 - (x % 8))) & 1;
-                    const color = palette[val] || [0, 0, 0];
+                    const color = effectivePalette[val] || [0, 0, 0];
                     const alpha = (val === 0 && !noTransparency) ? Alpha.Transparent : Alpha.Opaque;
                     [chunky[dstIdx], chunky[dstIdx + 1], chunky[dstIdx + 2], chunky[dstIdx + 3]] = [...color, alpha];
                 } else if (depth === 2) {
                     const bytePos = (y * rowBytes) + Math.floor(x / 4);
                     const byteVal = (bytePos < pixelData.length) ? pixelData[bytePos] : 0;
                     const val = (byteVal >> (6 - (x % 4) * 2)) & 0x03;
-                    const color = palette[val] || [0, 0, 0];
+                    const color = effectivePalette[val] || [0, 0, 0];
                     const alpha = (val === 0 && !noTransparency) ? Alpha.Transparent : Alpha.Opaque;
                     [chunky[dstIdx], chunky[dstIdx + 1], chunky[dstIdx + 2], chunky[dstIdx + 3]] = [...color, alpha];
                 } else if (depth === 4) {
                     const bytePos = (y * rowBytes) + Math.floor(x / 2);
                     const byteVal = (bytePos < pixelData.length) ? pixelData[bytePos] : 0;
                     const val = (byteVal >> (4 - (x % 2) * 4)) & 0x0F;
-                    const color = palette[val] || [0, 0, 0];
+                    const color = effectivePalette[val] || [0, 0, 0];
                     const alpha = (val === 0 && !noTransparency) ? Alpha.Transparent : Alpha.Opaque;
                     [chunky[dstIdx], chunky[dstIdx + 1], chunky[dstIdx + 2], chunky[dstIdx + 3]] = [...color, alpha];
                 } else if (depth === BitDepth.Depth32) {
@@ -134,7 +138,7 @@ class BitmapExtractor extends GenericExtractor {
                     [chunky[dstIdx], chunky[dstIdx + 1], chunky[dstIdx + 2], chunky[dstIdx + 3]] = [r, g, b, Alpha.Opaque];
                 } else {
                     const palIdx = readSafe();
-                    const color = palette[palIdx] || [0, 0, 0];
+                    const color = effectivePalette[palIdx] || [0, 0, 0];
                     const alpha = (palIdx === 0 && !noTransparency) ? Alpha.Transparent : Alpha.Opaque;
                     [chunky[dstIdx], chunky[dstIdx + 1], chunky[dstIdx + 2], chunky[dstIdx + 3]] = [...color, alpha];
                 }
@@ -394,8 +398,14 @@ class BitmapExtractor extends GenericExtractor {
                 [chunkyData[i * 4], chunkyData[i * 4 + 1], chunkyData[i * 4 + 2], chunkyData[i * 4 + 3]] = [r, g, b, a];
             }
         } else {
-            const isTransparentCanvas = !forceOpaque && this._checkIsTransparentCanvas(pixelData, width, height, rowBytes, depth);
-            chunkyData = this._normalizeToARGB(pixelData, width, height, rowBytes, depth, palette, !isTransparentCanvas && depth > 8 && !forceOpaque);
+            // Refined transparency logic: 
+            // 1. If forceOpaque (AlphaChannelUsed flag NOT set for 16/32bit), no transparency.
+            // 2. If it's a "transparent canvas" (corners are index 0), enable transparency.
+            // 3. For 8-bit or less, we often want index 0 to be transparent unless it's a matte or opaque member.
+            const isTransparentCanvas = !forceOpaque && depth <= 8 && this._checkIsTransparentCanvas(pixelData, width, height, rowBytes, depth);
+            const noTransparencyOverride = forceOpaque || (depth > 8 && !isTransparentCanvas && !(rawDepth & 0x4000));
+
+            chunkyData = this._normalizeToARGB(pixelData, width, height, rowBytes, depth, palette, noTransparencyOverride);
         }
 
         if (forceOpaque && depth > 8) {
