@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @version 1.1.8
+ * @version 1.2.0
  * mx-rip.js - Command-line interface for mx-shock-ripper-js
  * 
  * Provides a standardized CLI for extracting assets from .dcr, .cct, and .dir files. 
@@ -13,7 +13,7 @@ const { DCRExtractor, CCTExtractor } = require('../index');
 
 function showHelp() {
     process.stdout.write(`
-mx-shock-ripper-js - Production Grade Director Asset Ripper v1.1.8
+mx-shock-ripper-js - Production Grade Director Asset Ripper v1.2.0
 
 Usage:
   mx-rip <input_file> [output_dir] [options]

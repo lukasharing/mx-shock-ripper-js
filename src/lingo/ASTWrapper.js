@@ -1,4 +1,4 @@
-/** @version 1.0.0 - Made by @lukasharing github: https://github.com/lukasharing */
+/** @version 1.2.0 - Made by @lukasharing github: https://github.com/lukasharing */
 /**
  * ASTWrapper.js
  * 
