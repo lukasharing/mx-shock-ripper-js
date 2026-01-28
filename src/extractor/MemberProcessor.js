@@ -84,6 +84,7 @@ class MemberProcessor {
     resolvePalette(member) {
         let palette = null;
         let paletteSource = "unknown";
+        const platform = this.extractor.metadata.movie?.platform || 'Macintosh';
 
         // 1. Internal Palettes (Same cast)
         const internalPal = this.extractor.members.find(m => m.id === member.paletteId && m.typeId === MemberType.Palette);
@@ -111,24 +112,36 @@ class MemberProcessor {
             member.palette = { id: member.paletteId, name: shared.name || `shared_${member.paletteId}`, castlib: "shared" };
         }
 
-        // 4. Default Movie Palette / Fallbacks
+        // 4. Standard System Palettes & Defaults
         if (!palette) {
-            if (member.paletteId === 0) {
-                palette = this.extractor.defaultMoviePalette || Color.getMacSystem7();
-                paletteSource = "default_movie";
-                member.palette = { id: 0, name: "SystemMac", castlib: "system" };
-            } else if (member.paletteId === -1) {
-                palette = Color.getWindowsSystem();
-                paletteSource = "system_windows";
-                member.palette = { id: -1, name: "SystemWin", castlib: "system" };
-            } else {
-                palette = Color.getMacSystem7();
-                paletteSource = "fallback_system";
-                member.palette = { id: member.paletteId, name: "SystemMac", castlib: "system" };
+            const sysPalette = Color.getSystemPaletteById(member.paletteId, platform);
+            if (sysPalette) {
+                palette = sysPalette;
+                paletteSource = "system_id";
+
+                // Get human readable name from Color class if available
+                const paletteName = Color.getSystemPaletteName(member.paletteId) || (platform === 'Windows' ? "SystemWin" : "SystemMac");
+
+                member.palette = {
+                    id: member.paletteId,
+                    name: paletteName,
+                    castlib: "system"
+                };
             }
         }
 
-        this.extractor.log('DEBUG', `Member ${member.name}: Resolved paletteId ${member.paletteId} from ${paletteSource} source.`);
+        // 5. Absolute Fallback
+        if (!palette) {
+            palette = (platform === 'Windows') ? Color.getWindowsSystem() : Color.getMacSystem7();
+            paletteSource = "fallback_platform";
+            member.palette = {
+                id: member.paletteId || (platform === 'Windows' ? -101 : -1),
+                name: (platform === 'Windows') ? "SystemWin" : "SystemMac",
+                castlib: "system"
+            };
+        }
+
+        this.extractor.log('DEBUG', `Member ${member.name}: Resolved paletteId ${member.paletteId} from ${paletteSource} source (Platform: ${platform}).`);
         return palette;
     }
 
