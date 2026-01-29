@@ -1,5 +1,5 @@
 /**
- * @version 1.2.8
+ * @version 1.3.0
  * Config.js - General configuration and structural thresholds for Lingo
  */
 

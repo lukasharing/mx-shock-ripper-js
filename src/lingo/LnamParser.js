@@ -1,5 +1,5 @@
 /**
- * @version 1.2.8
+ * @version 1.3.0
  * LnamParser.js
  * 
  * Parses Lingo Name Table (Lnam) chunks into symbol arrays.

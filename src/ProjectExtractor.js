@@ -1,5 +1,5 @@
 /**
- * @version 1.2.8
+ * @version 1.3.0
  * ProjectExtractor.js - Multi-file orchestration & Global Resource Management
  * 
  * Handles the recursive discovery of linked cast libraries (.cct/.cst) and 
@@ -12,7 +12,7 @@ const path = require('path');
 const DirectorFile = require('./DirectorFile');
 const CastMember = require('./CastMember');
 const DataStream = require('./utils/DataStream');
-const Color = require('./utils/Color');
+const { Color } = require('./utils/Color');
 const { Magic, KeyTableValues } = require('./Constants');
 
 class ProjectExtractor {

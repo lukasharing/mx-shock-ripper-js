@@ -34,7 +34,10 @@ class ScriptHandler {
             const decompiled = await this._decompileLscr(lscrId, lscrSource, member);
             // If decompilation failed (contains error marker) and it's a Text/Field member,
             // assume the script is irrelevant/garbage and don't attach it to the member metadata.
-            if (decompiled && decompiled.includes('[DECOMPILE ERROR') && (member.typeId === MemberType.Text || member.typeId === MemberType.Field)) {
+            const isTextOrField = [MemberType.Text, MemberType.Field].includes(member.typeId);
+            const failure = (typeof decompiled === 'string') ? decompiled.includes('[DECOMPILE ERROR') : (decompiled?.text?.includes('[DECOMPILE ERROR'));
+
+            if (failure && isTextOrField) {
                 this.extractor.log('WARNING', `Member ID ${member.id} (${member.name}): Ignoring failed decompilation for Text member.`);
                 // No need to delete scriptFile as we don't set it anymore on member
             }

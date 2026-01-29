@@ -1,5 +1,5 @@
 /**
- * @version 1.2.8
+ * @version 1.3.0
  * Offsets.js - Binary structure offsets for Director chunks
  */
 

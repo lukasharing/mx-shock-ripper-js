@@ -1,10 +1,10 @@
 const fs = require('fs');
 const path = require('path');
-const Color = require('../utils/Color');
+const { Color } = require('../utils/Color');
 const { MemberType, Magic, AfterburnerTags } = require('../Constants');
 
 /**
- * @version 1.2.9
+ * @version 1.3.0
  * MemberProcessor.js - Centralized orchestration for member-specific extraction logic.
  */
 class MemberProcessor {

@@ -1,5 +1,5 @@
 /**
- * @version 1.2.8
+ * @version 1.3.0
  * SoundExtractor.js - Handles extraction and conversion of Director 
  * sound (SND) assets. Supports SWA, MP3, and standard PCM.
  */

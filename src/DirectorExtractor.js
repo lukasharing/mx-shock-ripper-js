@@ -1,5 +1,5 @@
 /**
- * @version 1.2.9
+ * @version 1.3.0
  * DirectorExtractor.js - Refactored modular orchestrator for Director assets
  */
 
@@ -27,7 +27,7 @@ const MovieExtractor = require('./member/MovieExtractor');
 const LingoDecompiler = require('./lingo/LingoDecompiler');
 
 const { Magic, MemberType } = require('./Constants');
-const Color = require('./utils/Color');
+const { Color } = require('./utils/Color');
 
 class DirectorExtractor extends BaseExtractor {
     constructor(inputPath, outputDir, options = {}) {

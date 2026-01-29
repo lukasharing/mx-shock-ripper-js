@@ -1,5 +1,5 @@
 /**
- * @version 1.2.8
+ * @version 1.3.0
  * Magic.js - FourCC identifiers and Magic numbers for Director chunks
  */
 

@@ -1,5 +1,5 @@
 /**
- * @version 1.2.8
+ * @version 1.3.0
  * Color.js - Palette and Color management for Director Assets
  * 
  * Provides reference implementations of the standard Adobe Director 
@@ -392,7 +392,7 @@ class Color {
 
     static getMacSystem7() { return PALETTES.MAC; }
     static getWindowsSystem() { return PALETTES.WIN; }
-    static getGrayscale() { return PALETTES.GRAY; }
+    static getGrayscale() { return PALETTES.GRAYSCALE; }
 
     /**
      * Standard Director System Palette IDs

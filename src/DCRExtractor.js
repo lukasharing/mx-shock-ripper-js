@@ -1,5 +1,5 @@
 /**
- * @version 1.2.8
+ * @version 1.3.0
  * DCRExtractor.js - Full project orchestrator for Adobe Director (.dcr)
  * 
  * Handles multi-file extraction by loading the entry movie and recursively 
