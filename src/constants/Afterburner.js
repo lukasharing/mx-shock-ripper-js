@@ -27,5 +27,7 @@ module.exports = {
     'ediM': 'medi', // Media (Shockwave)
     'SND ': 'snd ', // Sound (Shockwave)
     'muhT': 'Thum', // Thumbnail (Shockwave)
-    'STG ': 'Grid'  // Grid (Shockwave)
+    'STG ': 'Grid', // Grid (Shockwave)
+    'CDGF': 'FGDC', // Reversed FGDC (Little Endian)
+    'MDGF': 'FGDM'  // Reversed FGDM (Little Endian)
 };

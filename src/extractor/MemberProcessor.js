@@ -73,9 +73,26 @@ class MemberProcessor {
     }
 
     async processBitmap(member, map) {
-        const bitdId = map[Magic.BITD] || map[Magic.BITD.toLowerCase()] || map['DIB '] || map['DIB*'] || map['Abmp'] || map['PMBA'];
-        if (!bitdId) {
-            this.extractor.log('WARNING', `No BITD/DIB/Abmp/PMBA chunk found for bitmap member ${member.id} (${member.name}). Available tags: ${Object.keys(map).join(', ')}`);
+        const possibleTags = [Magic.BITD, Magic.BITD_LOWER, Magic.DIB, Magic.DIB_STAR, Magic.ABMP, Magic.PMBA];
+        let pixels = null;
+        let selectedTag = null;
+
+        for (const tag of possibleTags) {
+            const id = map[tag];
+            if (!id) continue;
+
+            const chunk = this.extractor.dirFile.getChunkById(id);
+            if (!chunk) continue;
+
+            const data = await this.extractor.dirFile.getChunkData(chunk);
+            if (data && data.length > (pixels ? pixels.length : 0)) {
+                pixels = data;
+                selectedTag = tag;
+            }
+        }
+
+        if (!pixels) {
+            this.extractor.log('WARNING', `No valid pixel data found for bitmap member ${member.id} (${member.name}). Available tags: ${Object.keys(map).join(', ')}`);
             return;
         }
 
@@ -93,7 +110,6 @@ class MemberProcessor {
             palette = this.resolvePalette(member);
         }
 
-        const pixels = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(bitdId));
         if (pixels) {
             this.extractor.log('INFO', `Extracting Bitmap: ${member.name} (${member.width}x${member.height})`);
             const outPath = path.join(this.extractor.outputDir, `${member.name}.png`);

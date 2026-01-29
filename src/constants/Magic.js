@@ -37,5 +37,16 @@ module.exports = {
     VWky: 'VWky', // Memory Map Key
     DRCF: 'DRCF', // Config (Dir 5+)
     SCORE: 'Score', // Score/Timeline
-    VWSC: 'VWSC'  // Score (Dir 4+)
+    VWSC: 'VWSC',  // Score (Dir 4+)
+    FVER: 'Fver',  // File Version
+    FMAP: 'Fmap',  // Logical to Physical Map
+    FCDR: 'Fcdr',  // File Catalog Directory
+    ABMP: 'Abmp',  // Asset Bitmap/Map
+    FGEI: 'FGEI',  // Inline Resource Header
+    CDGF: 'CDGF',  // Reversed FGDC
+    MDGF: 'MDGF',  // Reversed FGDM
+    FGDM: 'FGDM',  // Compressed Afterburner (Variant)
+    DIB: 'DIB ',  // Device Independent Bitmap
+    DIB_STAR: 'DIB*', // Alternate DIB
+    PMBA: 'PMBA'   // Protected Abmp
 };

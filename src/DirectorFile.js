@@ -19,6 +19,7 @@ class DirectorFile {
         this.format = 'unknown';
         this.fmap = null;
         this.subtype = null;
+        this.isLittleEndianFile = false;
     }
 
     async open(filePath) {
@@ -39,19 +40,22 @@ class DirectorFile {
         if (this.fmap && this.fmap[id] !== undefined) {
             physicalId = this.fmap[id];
         }
-        return this.chunks.find(c => c.id === physicalId);
+        // Use findLast to ensure ABMP (parsed later) entries overwrite Fcdr/mmap entries
+        const matches = this.chunks.filter(c => c.id === physicalId);
+        return matches.length > 0 ? matches[matches.length - 1] : null;
     }
 
     async parse() {
         const magic = this.ds.readFourCC();
 
-        if (magic === Magic.XFIR || magic === 'XFIR') {
+        if (magic === Magic.XFIR) {
             this.ds.endianness = 'little';
             this.format = 'rifx-little';
-        } else if (magic === Magic.FGDC || magic === 'FGDC') {
+            this.isLittleEndianFile = true;
+        } else if (magic === Magic.FGDC) {
             this.isAfterburned = true;
             this.format = 'afterburner';
-        } else if (magic === Magic.RIFX || magic === 'RIFX') {
+        } else if (magic === Magic.RIFX) {
             this.format = 'rifx-big';
         } else {
             throw new Error(`Unsupported file format: ${magic}`);
@@ -64,9 +68,13 @@ class DirectorFile {
             this.subtype = this.ds.readFourCC();
 
             // Detect hidden Afterburner subtypes
-            if ([Magic.FGDC, 'CDGF', 'FGDM', 'MDGF'].includes(this.subtype)) {
+            if ([Magic.FGDC, Magic.CDGF, Magic.FGDM, Magic.MDGF].includes(this.subtype)) {
                 this.isAfterburned = true;
                 this.format = 'afterburner';
+                // If we found CDGF (reversed FGDC), we are in little-endian space
+                if (this.subtype === Magic.CDGF || this.subtype === Magic.MDGF) {
+                    this.ds.endianness = 'little';
+                }
                 await this.calculateAfterburnedStructure();
             } else {
                 await this.parseUncompressedStructure();
@@ -130,8 +138,13 @@ class DirectorFile {
     }
 
     async _autoDetectEndianness() {
+        // If we already know we are XFIR, we are little-endian. Don't second-guess.
+        if (this.isLittleEndianFile) {
+            this.ds.endianness = 'little';
+            return;
+        }
         // Heuristic: Check Lnam or Key* chunk for sanity
-        const lnam = this.chunks.find(c => DirectorFile.unprotect(c.type) === 'Lnam');
+        const lnam = this.getChunkById(1) || this.chunks.find(c => DirectorFile.unprotect(c.type) === 'Lnam');
         if (lnam) {
             const data = await this.getChunkData(lnam);
             if (data && data.length >= 16) {
@@ -157,7 +170,7 @@ class DirectorFile {
 
     async _parseFver() {
         const tag = DirectorFile.unprotect(this.ds.peekFourCC());
-        if (tag === 'Fver') {
+        if (tag === Magic.FVER) {
             this.ds.readFourCC();
             this.ds.skip(this.ds.readVarInt());
         }
@@ -165,7 +178,7 @@ class DirectorFile {
 
     async _parseFmap() {
         const tag = DirectorFile.unprotect(this.ds.peekFourCC());
-        if (tag === 'Fmap') {
+        if (tag === Magic.FMAP) {
             this.ds.readFourCC();
             const fmapLen = this.ds.readVarInt();
             const fmapEnd = this.ds.position + fmapLen;
@@ -180,7 +193,7 @@ class DirectorFile {
 
     async _parseFcdr() {
         const tag = DirectorFile.unprotect(this.ds.peekFourCC());
-        if (tag === 'Fcdr') {
+        if (tag === Magic.FCDR) {
             this.ds.readFourCC();
             const fcdrLen = this.ds.readVarInt();
             const fcdrDecomp = zlib.inflateSync(this.ds.readBytes(fcdrLen));
@@ -196,13 +209,11 @@ class DirectorFile {
                     this.chunks.push({ type: DirectorFile.unprotect(tag), len, off, id: i });
                 }
             }
-
         }
     }
-
     async _parseAbmp() {
         const tag = DirectorFile.unprotect(this.ds.peekFourCC());
-        if (['Abmp', 'ABMP', 'pmbA'].includes(tag)) {
+        if ([Magic.ABMP, Magic.PMBA].includes(tag) || tag.toUpperCase() === 'ABMP') {
             this.ds.readFourCC();
             const abmpLen = this.ds.readVarInt();
             const abmpEnd = this.ds.position + abmpLen;
@@ -238,7 +249,7 @@ class DirectorFile {
 
     async _parseFgei() {
         const tag = DirectorFile.unprotect(this.ds.peekFourCC());
-        if (['FGEI', 'IEGF'].includes(tag)) {
+        if (tag === Magic.FGEI || tag === 'IEGF') {
             this.ds.readFourCC();
             this.ds.readVarInt();
             this.ilsBodyOffset = this.ds.position;
@@ -283,7 +294,8 @@ class DirectorFile {
             if (this.format === 'afterburner') {
                 this.ds.seek(this.ilsBodyOffset + chunk.off);
                 const raw = this.ds.readBytes(chunk.len);
-                if (chunk.compType === 1 || chunk.uncompLen > chunk.len) {
+                // Decompress if compType indicates it OR if uncompLen differs from chunk len (even if smaller)
+                if (chunk.compType === 1 || (chunk.uncompLen > 0 && chunk.uncompLen !== chunk.len)) {
                     try {
                         data = zlib.inflateSync(raw);
                     } catch (e) {
@@ -297,6 +309,7 @@ class DirectorFile {
                                     throw e2;
                                 }
                             } catch (e3) {
+                                // Fallback: maybe it's not actually compressed despite flagging?
                                 data = raw;
                             }
                         }

@@ -1,5 +1,5 @@
 /**
- * @version 1.3.1
+ * @version 1.3.2
  * DirectorExtractor.js - Refactored modular orchestrator for Director assets
  */
 
