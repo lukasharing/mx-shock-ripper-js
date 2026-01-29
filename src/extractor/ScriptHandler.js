@@ -10,36 +10,35 @@ class ScriptHandler {
     async handleScripts(member, memberKey) {
         if (!this.extractor.options.extractScript) return;
 
+        // 1. Resolve and extract Text-based scripts (STXT/TEXT)
         const { text, source: textSource } = await this._resolveScriptSource(member, memberKey);
-
         if (text && text.trim() && member.typeId !== MemberType.Script) {
-
             const outPath = path.join(this.extractor.outputDir, `${member.name}`);
             const res = this.extractor.scriptExtractor.save(text, outPath, member);
             if (res) {
-                member.format = 'ls';
+                // Only set format if it's the primary script or no format exists yet
+                if (!member.format || member.typeId === MemberType.Script) {
+                    member.format = 'ls';
+                }
                 member.scriptLength = res.scriptLength;
-                member.scriptSource = textSource;
             }
             return;
         }
 
+        // 2. Resolve and extract Compiled scripts (Lscr/Bytecode)
         const potentialKeys = [memberKey];
         if (member.scriptId > 0 && this.extractor.metadataManager.keyTable[member.scriptId])
             potentialKeys.push(this.extractor.metadataManager.keyTable[member.scriptId]);
 
         const { lscrId, source: lscrSource } = this._resolveLscrChunk(member, potentialKeys);
-
         if (lscrId) {
-            const decompiled = await this._decompileLscr(lscrId, lscrSource, member);
-            // If decompilation failed (contains error marker) and it's a Text/Field member,
-            // assume the script is irrelevant/garbage and don't attach it to the member metadata.
-            const isTextOrField = [MemberType.Text, MemberType.Field].includes(member.typeId);
-            const failure = (typeof decompiled === 'string') ? decompiled.includes('[DECOMPILE ERROR') : (decompiled?.text?.includes('[DECOMPILE ERROR'));
-
-            if (failure && isTextOrField) {
-                this.extractor.log('WARNING', `Member ID ${member.id} (${member.name}): Ignoring failed decompilation for Text member.`);
-                // No need to delete scriptFile as we don't set it anymore on member
+            const result = await this._decompileLscr(lscrId, lscrSource, member);
+            if (result && result.format) {
+                // Update metadata if it's a Script member or no primary asset format is set
+                if (!member.format || member.typeId === MemberType.Script) {
+                    member.format = result.format;
+                }
+                member.scriptLength = result.length;
             }
         } else if (member.typeId === MemberType.Script) {
             this.extractor.log('WARNING', `Member ID ${member.id} (Script): No script chunks found.`);
@@ -110,7 +109,7 @@ class ScriptHandler {
     async _decompileLscr(lscrId, source, member) {
         const chunk = this.extractor.dirFile.getChunkById(lscrId);
         const lscrData = chunk ? await this.extractor.dirFile.getChunkData(chunk) : null;
-        if (!lscrData) return;
+        if (!lscrData) return null;
 
         this.extractor.log('INFO', `Member ID ${member.id}: Decompiling Bytecode from ${source}...`);
 
@@ -138,33 +137,29 @@ class ScriptHandler {
         const decompiled = this.extractor.lingoDecompiler.decompile(lscrData, names, member.scriptType, member.id, { lasm: this.extractor.options.lasm });
         const decompiledText = (typeof decompiled === 'object') ? decompiled.text || decompiled.source : decompiled;
 
-        if (decompiledText) {
-            const outPath = path.join(this.extractor.outputDir, `${member.name}.ls`);
-            fs.writeFileSync(outPath, decompiledText);
-            member.format = 'ls';
-            member.scriptSource = `${source} (Decompiled)`;
-            member.scriptLength = decompiledText.length;
+        // Always save raw bytecode (.lsc)
+        const lscPath = path.join(this.extractor.outputDir, `${member.name}.lsc`);
+        this.extractor.genericExtractor.save(lscrData, lscPath, member);
 
-            // LASM is redundant for standard extraction, removing per requirements
-            /*
-            if (this.extractor.options.lasm && decompiled.lasm) {
-                const lasmPath = path.join(this.extractor.outputDir, `${member.name}.lasm`);
-                fs.writeFileSync(lasmPath, decompiled.lasm);
-                member.lasmFile = `${member.name}.lasm`;
-            }
-            */
+        if (decompiledText) {
+            const lsPath = path.join(this.extractor.outputDir, `${member.name}.ls`);
+            this.extractor.scriptExtractor.save(decompiledText, lsPath, member);
 
             if (decompiledText.includes(LingoConfig.Labels.ProtectedScript)) {
                 this.extractor.stats.protectedScripts = (this.extractor.stats.protectedScripts || 0) + 1;
             }
-            return { format: 'ls' };
+
+            return {
+                format: 'ls',
+                length: decompiledText.length
+            };
         } else {
-            this.extractor.log('WARNING', `Member ID ${member.id}: Decompilation failed. Saving raw bytecode.`);
-            const lscPath = path.join(this.extractor.outputDir, `${member.name}.lsc`);
-            this.extractor.genericExtractor.save(lscrData, lscPath, member);
-            member.scriptSource = `${source} (Raw)`;
-            member.format = 'lsc';
-            return { format: 'lsc' };
+            this.extractor.log('WARNING', `Member ID ${member.id}: Decompilation failed.`);
+
+            return {
+                format: 'lsc',
+                length: lscrData.length
+            };
         }
     }
 }

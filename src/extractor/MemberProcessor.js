@@ -65,6 +65,11 @@ class MemberProcessor {
                 }
                 break;
         }
+
+        // Process scripts for any member that might have one (unless it's a Palette or Script which is handled above)
+        if (member.typeId !== MemberType.Palette && member.typeId !== MemberType.Script && this.extractor.options.extractScript) {
+            await this.extractor.scriptHandler.handleScripts(member, map);
+        }
     }
 
     async processBitmap(member, map) {
