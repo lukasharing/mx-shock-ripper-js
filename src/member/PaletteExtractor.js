@@ -1,4 +1,4 @@
-/** @version 1.2.8
+/** @version 1.2.8 */
 const DataStream = require('../utils/DataStream');
 const GenericExtractor = require('./GenericExtractor');
 const { Resources: { Labels } } = require('../Constants');
