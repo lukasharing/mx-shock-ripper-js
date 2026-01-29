@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { Color } = require('../utils/Color');
 const { MemberType, Magic, AfterburnerTags } = require('../Constants');
+const { BitmapTags } = require('../constants/Bitmap');
 
 /**
  * @version 1.3.0
@@ -73,9 +74,10 @@ class MemberProcessor {
     }
 
     async processBitmap(member, map) {
-        const possibleTags = [Magic.BITD, Magic.BITD_LOWER, Magic.DIB, Magic.DIB_STAR, Magic.ABMP, Magic.PMBA];
+        const possibleTags = BitmapTags.map(tag => Magic[tag] || tag);
         let pixels = null;
         let selectedTag = null;
+        const endianness = member.endianness || this.extractor.dirFile.ds.endianness;
 
         for (const tag of possibleTags) {
             const id = map[tag];
@@ -99,9 +101,14 @@ class MemberProcessor {
         let alphaBuf = null;
         if (map[Magic.ALFA]) {
             const alfa = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(map[Magic.ALFA]));
-            if (alfa) {
+            if (alfa && alfa.length > 0) {
                 const expected = (member.width || 1) * (member.height || 1);
+                // Only decompress if it looks compressed (smaller than raw size), 
+                // but verify content existence first.
                 alphaBuf = (alfa.length < expected) ? this.extractor.bitmapExtractor.decompressPackBits(alfa, expected) : alfa;
+
+                // Double check result
+                if (alphaBuf && alphaBuf.length === 0) alphaBuf = null;
             }
         }
 
@@ -140,26 +147,73 @@ class MemberProcessor {
         let paletteSource = "unknown";
         const platform = this.extractor.metadata.movie?.platform || 'Macintosh';
 
-        // 1. Internal Palettes (Same cast)
-        const internalPal = this.extractor.members.find(m => m.id === member.paletteId && m.typeId === MemberType.Palette);
-        if (internalPal?.palette) {
-            palette = internalPal.palette;
-            paletteSource = "internal";
-            member.palette = { id: internalPal.id, name: internalPal.name, castlib: "internal" };
+        // 0. Skip palette resolution for true-color bitmaps (16-bit, 24-bit, 32-bit)
+        if (member.bitDepth && member.bitDepth >= 16) {
+            // True-color bitmaps don't use palettes - they store RGB values directly
+            member.palette = { id: 0, name: "TrueColor", castlib: "builtin" };
+            return null; // No palette needed
         }
 
-        // 2. Project Context (Main movie or discovered casts)
+        // 1. Resolve External Cast Context (if available)
+        let targetCastName = "internal";
+        if (member.castLibId > 1 && member.castLibId < 1000 && this.extractor.metadata.castList) {
+            // castLibId is 1-based index into the CastList table.
+            const castEntry = this.extractor.metadata.castList[member.castLibId - 1];
+            if (castEntry) {
+                targetCastName = castEntry.name;
+            } else {
+                // Cast lookup failed
+            }
+        }
+
+        // 2. Internal Palettes (Same cast / CastLib 1)
+        if (targetCastName === "internal") {
+            const internalPal = this.extractor.members.find(m => m.id === member.paletteId && m.typeId === MemberType.Palette);
+            if (internalPal?.palette) {
+                palette = internalPal.palette;
+                paletteSource = "internal";
+                member.palette = { id: internalPal.id, name: internalPal.name, castlib: "internal" };
+            }
+        }
+
+        // 2. Project Context (Cross-Cast Resolution)
         if (!palette && this.extractor.options.projectContext) {
-            const globalEntry = this.extractor.options.projectContext.globalPalettes.find(p => p.id === member.paletteId || p.id === String(member.paletteId));
-            if (globalEntry) {
-                palette = globalEntry.colors;
-                paletteSource = "project";
-                member.palette = { id: globalEntry.id, name: globalEntry.name, castlib: globalEntry.source ? path.parse(globalEntry.source).name : "unknown" };
+            // Heuristic: If we know the target cast info, prioritize looking for palettes belonging to that cast.
+            if (targetCastName !== "internal") {
+                const globalEntry = this.extractor.options.projectContext.globalPalettes.find(p =>
+                    (p.id === member.paletteId || p.id === String(member.paletteId)) &&
+                    (p.source && path.parse(p.source).name.toLowerCase() === targetCastName.toLowerCase())
+                );
+
+                if (globalEntry) {
+                    palette = globalEntry.colors;
+                    paletteSource = "project_exact";
+                    member.palette = { id: globalEntry.id, name: globalEntry.name, castlib: targetCastName };
+                } else {
+                    // If check fails, we still inform valid link, just missing data
+                    member.palette = { id: member.paletteId, name: `Missing_Palette_${member.paletteId}`, castlib: targetCastName };
+                    // We DO NOT fallback to system if we know it belongs to an external cast!
+                    // Returning null palette here implies "custom palette missing", which renders as RED/Warning in UI?
+                    // Or keep fallback to system just so it displays *something*?
+                    // Better to fallback to System/Grayscale but KEEP the metadata pointing to external.
+                }
+            } else {
+                // Legacy Heuristic for unmapped/internal-but-global lookups
+                const isSmallId = (member.paletteId > 0 && member.paletteId <= 100);
+                if (!isSmallId) {
+                    const globalEntry = this.extractor.options.projectContext.globalPalettes.find(p => p.id === member.paletteId || p.id === String(member.paletteId));
+                    if (globalEntry) {
+                        palette = globalEntry.colors;
+                        paletteSource = "project_heuristic";
+                        member.palette = { id: globalEntry.id, name: globalEntry.name, castlib: globalEntry.source ? path.parse(globalEntry.source).name : "unknown" };
+                    }
+                }
             }
         }
 
         // 3. Shared Palettes (shared_palettes.json)
-        if (!palette && (this.extractor.sharedPalettes[member.paletteId] || this.extractor.sharedPalettes[String(member.paletteId)])) {
+        // If we still haven't found it, and it wasn't strictly external (or external lookup failed)
+        if (!palette && !member.palette?.castlib && (this.extractor.sharedPalettes[member.paletteId] || this.extractor.sharedPalettes[String(member.paletteId)])) {
             const shared = this.extractor.sharedPalettes[member.paletteId] || this.extractor.sharedPalettes[String(member.paletteId)];
             palette = shared.colors || shared;
             paletteSource = "shared_json";
@@ -172,15 +226,15 @@ class MemberProcessor {
             if (sysPalette) {
                 palette = sysPalette;
                 paletteSource = "system_id";
-
-                // Get human readable name from Color class if available
                 const paletteName = Color.getSystemPaletteName(member.paletteId) || (platform === 'Windows' ? "SystemWin" : "SystemMac");
-
-                member.palette = {
-                    id: member.paletteId,
-                    name: paletteName,
-                    castlib: "system"
-                };
+                // Only overwrite if we didn't establish a better link (e.g. external missing)
+                if (!member.palette || member.palette.castlib === "system" || member.palette.castlib === "unknown") {
+                    member.palette = {
+                        id: member.paletteId,
+                        name: paletteName,
+                        castlib: "system"
+                    };
+                }
             }
         }
 
@@ -188,13 +242,14 @@ class MemberProcessor {
         if (!palette) {
             palette = (platform === 'Windows') ? Color.getWindowsSystem() : Color.getMacSystem7();
             paletteSource = "fallback_platform";
-            member.palette = {
-                id: member.paletteId || (platform === 'Windows' ? -101 : -1),
-                name: (platform === 'Windows') ? "SystemWin" : "SystemMac",
-                castlib: "system"
-            };
+            if (!member.palette) {
+                member.palette = {
+                    id: member.paletteId || (platform === 'Windows' ? -101 : -1),
+                    name: (platform === 'Windows') ? "SystemWin" : "SystemMac",
+                    castlib: "system"
+                };
+            }
         }
-
 
         return palette;
     }

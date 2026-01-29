@@ -90,11 +90,11 @@ class DirectorFile {
             const tag = this.ds.readFourCC();
             const len = this.ds.readUint32();
 
-            if (tag === Magic.IMAP || tag === 'IMAP') {
+            if (tag === Magic.IMAP || tag === Magic.imap) {
                 this.ds.skip(4);
                 mmapOff = (this.ds.endianness === 'little') ? this.ds.buffer.readUInt32LE(this.ds.position) : this.ds.buffer.readUInt32BE(this.ds.position);
                 break;
-            } else if (tag === Magic.MMAP || tag === 'MMAP') {
+            } else if (tag === Magic.MMAP || tag === Magic.mmap) {
                 mmapOff = this.ds.position - 8;
                 break;
             }
@@ -249,7 +249,7 @@ class DirectorFile {
 
     async _parseFgei() {
         const tag = DirectorFile.unprotect(this.ds.peekFourCC());
-        if (tag === Magic.FGEI || tag === 'IEGF') {
+        if (tag === Magic.FGEI || tag === Magic.IEGF) {
             this.ds.readFourCC();
             this.ds.readVarInt();
             this.ilsBodyOffset = this.ds.position;

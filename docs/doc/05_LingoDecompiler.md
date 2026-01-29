@@ -37,5 +37,13 @@ While some tools assume 1-based indexing for Lingo, our analysis confirmed that 
 ### V4 (Director 4.0) Differences
 Older scripts (like `Event Agent Class`) use a fixed 46-byte entry size in the `HAND` segment and specialized `GET`/`SET` opcodes (`0x1C`/`0x1D`) that map to a hardcoded property table (e.g., `iv 21` -> `the rect`). Our decompiler includes a manual mapping for these legacy properties.
 
+
 ### Complex Loops
 Decompiling `repeat with ... down to` requires monitoring the stack for `peek` opcodes and reconstructing the `(start, end, variable)` triplet.
+
+## Output Formats
+
+The extractor produces two files for every script member:
+1.  **`.lsc` (Compiled Bytecode)**: The raw binary content of the `Lscr` chunk. Always extracted for preservation.
+2.  **`.ls` (Lingo Source)**: The decompiled text. Only generated if the decompiler successfully processes the bytecode.
+

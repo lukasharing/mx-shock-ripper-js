@@ -14,7 +14,7 @@ Technical details on how specific cast member types are handled and extracted.
 ## Scripts (Type 11)
 -   **Chunks**: `CASt` links to `Lscr` (Bytecode). `Lnam` (Names) and `Lctx` (Context).
 -   **Decompilation**: Bytecode is translated back to Lingo source using `LingoDecompiler.js`.
--   **Extraction**: Saved as **`.ls`** (Lingo Source). If decompilation fails, falls back to `.lsc` (Compiled).
+-   **Extraction**: Always saves **`.lsc`** (Compiled Bytecode). Also saves **`.ls`** (Lingo Source) if decompilation succeeds.
 
 ## Sounds (Type 6)
 -   **Chunks**: `CASt` links to `SND ` (Standard) or `medi` (MP3/SWA).

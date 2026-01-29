@@ -25,8 +25,8 @@ The extractor makes a first pass over all `CASt` chunks:
 
 ## 5. Content Extraction (Type-Specific)
 A second pass iterates through the members and invokes sub-extractors:
--   **Bitmaps**: Finds the linked `BITD` chunk. Decompresses image data. Applies `CLUT` (Palette) and `ALFA` (Alpha Mask). Exports `.png`.
--   **Scripts**: Finds `Lscr`. Decompiles bytecode to Lingo source (`.ls`).
+-   **Bitmaps**: Finds the linked `BITD` chunk (or `DIB`/`Abmp`/`PMBA`). Decompresses image data. Applies `CLUT` (Palette) and `ALFA` (Alpha Mask). Exports `.png`.
+-   **Scripts**: Finds `Lscr` or `STXT`. Extracts both compiled bytecode (`.lsc`) and decompiled source (`.ls`).
 -   **Sounds**: Finds `SND ` or `medi`. Wraps data in a WAV header or dumps raw MP3 data.
 -   **Text**: Decodes styled text chunks.
 

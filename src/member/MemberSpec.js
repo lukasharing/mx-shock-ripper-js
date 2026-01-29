@@ -21,10 +21,13 @@ class BitmapSpec {
         const width = initialRect.right - initialRect.left;
 
         let paletteId = 0, bitDepth = 8, flags2 = 0, alphaCastId = -1, compression = 0;
+        let depthFlags = 0;
         if (len >= 24) {
             paletteId = ds.readInt16();
-            flags2 = ds.readUint16();
-            bitDepth = ds.readInt16();
+            flags2 = ds.readUint16(); // Offset 20: Often flags in Shockwave/Shoreline
+            const rawDepth = ds.readInt16(); // Offset 22: Bit depth + flags
+            bitDepth = rawDepth & 0x00FF; // Actual logical depth
+            depthFlags = rawDepth & 0xFF00; // High-byte flags (e.g. 0x4000)
         }
         if (len >= 28) {
             alphaCastId = ds.readInt16();
@@ -32,11 +35,18 @@ class BitmapSpec {
         }
 
         return {
-            height, width, regPoint, paletteId, bitDepth,
+            height,
+            width,
+            regPoint,
+            paletteId,
+            bitDepth,
+            depthFlags,
+            flags2,
             _castFlags: flags1,
             _initialRect: initialRect,
             _regLegacy: regLegacy,
-            _flags2: flags2, _alphaCastId: alphaCastId, _compression: compression
+            _alphaCastId: alphaCastId,
+            _compression: compression
         };
     }
 }

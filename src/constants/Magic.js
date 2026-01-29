@@ -48,5 +48,13 @@ module.exports = {
     FGDM: 'FGDM',  // Compressed Afterburner (Variant)
     DIB: 'DIB ',  // Device Independent Bitmap
     DIB_STAR: 'DIB*', // Alternate DIB
-    PMBA: 'PMBA'   // Protected Abmp
+    PMBA: 'PMBA',  // Protected Abmp
+    // Internal Map Tags
+    imap: 'imap',
+    mmap: 'mmap',
+    // Afterburner Inline
+    IEGF: 'IEGF',
+    // Junk/Free
+    junk: 'junk',
+    free: 'free'
 };

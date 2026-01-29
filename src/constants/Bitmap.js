@@ -17,5 +17,6 @@ module.exports = {
     Alpha: {
         Opaque: 255,
         Transparent: 0
-    }
+    },
+    BitmapTags: ['BITD', 'bitd', 'DIB ', 'DIB*', 'Abmp', 'PMBA']
 };
