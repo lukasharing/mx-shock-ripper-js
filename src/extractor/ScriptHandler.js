@@ -141,22 +141,29 @@ class ScriptHandler {
             member.scriptFile = `${member.name}.ls`;
             member.scriptSource = `${source} (Decompiled)`;
             member.scriptLength = decompiledText.length;
+            member.format = 'ls';
 
+            // LASM is redundant for standard extraction, removing per requirements
+            /*
             if (this.extractor.options.lasm && decompiled.lasm) {
                 const lasmPath = path.join(this.extractor.outputDir, `${member.name}.lasm`);
                 fs.writeFileSync(lasmPath, decompiled.lasm);
                 member.lasmFile = `${member.name}.lasm`;
             }
+            */
 
             if (decompiledText.includes(LingoConfig.Labels.ProtectedScript)) {
                 this.extractor.stats.protectedScripts = (this.extractor.stats.protectedScripts || 0) + 1;
             }
+            return { file: `${member.name}.ls`, format: 'ls' };
         } else {
             this.extractor.log('WARNING', `Member ID ${member.id}: Decompilation failed. Saving raw bytecode.`);
             const lscPath = path.join(this.extractor.outputDir, `${member.name}.lsc`);
             this.extractor.genericExtractor.save(lscrData, lscPath, member);
             member.scriptFile = `${member.name}.lsc`;
             member.scriptSource = `${source} (Raw)`;
+            member.format = 'lsc';
+            return { file: `${member.name}.lsc`, format: 'lsc' };
         }
     }
 }

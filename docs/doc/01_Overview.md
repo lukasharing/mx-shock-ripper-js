@@ -22,6 +22,7 @@ Specialized classes for handling specific data formats:
 -   **SoundExtractor**: Extracts raw audio samples (`SND `, `medi`) and wraps them in WAV headers or exports MP3s.
 -   **ScriptExtractor / LingoDecompiler**: Decompiles Lingo bytecode (`Lscr`) into readable source code (`.ls`), reconstructing control flow and syntax.
 -   **TextExtractor / FieldExtractor**: Decodes styled text content.
+-   **ShapeExtractor / VectorShapeExtractor**: Converts QuickDraw shapes to SVG and dumps complex Vector Shapes as raw data.
 
 ## Data Flow
 

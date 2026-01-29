@@ -1,5 +1,5 @@
 /**
- * @version 1.2.7
+ * @version 1.2.8
  * FontExtractor.js - Extraction logic for Director VWFT/FONT assets
  * 
  * Preserves the proprietary binary structure of Director font members, 
@@ -54,7 +54,15 @@ class FontExtractor extends GenericExtractor {
         const result = this.extract(buffer);
         const finalPath = outputPath.endsWith(result.ext) ? outputPath : outputPath + result.ext;
 
-        return this.saveFile(result.data, finalPath, `Font (${result.ext})`);
+        const saved = this.saveFile(result.data, finalPath, `Font (${result.ext})`);
+        if (saved) {
+            return {
+                file: saved.file,
+                size: saved.size,
+                format: result.ext.startsWith('.') ? result.ext.slice(1) : result.ext
+            };
+        }
+        return null;
     }
 }
 

@@ -1,5 +1,5 @@
 /**
- * @version 1.2.7
+ * @version 1.2.8
  * TextExtractor.js - Extraction logic for Director Text and Field members
  * 
  * Handles STXT and TEXT chunks. Exports as RTF to preserve potential formatting 
@@ -66,7 +66,15 @@ class TextExtractor extends GenericExtractor {
     save(buffer, outputPath, member) {
         const rtfContent = this.extract(buffer);
         const finalPath = outputPath.endsWith('.rtf') ? outputPath : outputPath + '.rtf';
-        return this.saveFile(Buffer.from(rtfContent, 'utf8'), finalPath, "Text (RTF)");
+        const result = this.saveFile(Buffer.from(rtfContent, 'utf8'), finalPath, "Text (RTF)");
+        if (result) {
+            return {
+                file: result.file,
+                size: result.size,
+                format: 'rtf'
+            };
+        }
+        return false;
     }
 }
 

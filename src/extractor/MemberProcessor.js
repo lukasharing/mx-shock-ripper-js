@@ -89,7 +89,10 @@ class MemberProcessor {
             this.extractor.log('INFO', `Extracting Bitmap: ${member.name} (${member.width}x${member.height})`);
             const outPath = path.join(this.extractor.outputDir, `${member.name}.png`);
             const res = await this.extractor.bitmapExtractor.extract(pixels, outPath, member, palette, alphaBuf);
-            if (res) member.image = path.basename(res.path);
+            if (res) {
+                member.image = path.basename(res.path);
+                member.format = res.format;
+            }
         }
     }
 
@@ -102,7 +105,10 @@ class MemberProcessor {
             this.extractor.log('INFO', `Extracting Text: ${member.name}`);
             const outPath = path.join(this.extractor.outputDir, member.name);
             const res = this.extractor.textExtractor.save(data, outPath, member);
-            if (res && res.file) member.textFile = res.file;
+            if (res && res.file) {
+                member.textFile = res.file;
+                member.format = res.format;
+            }
         }
     }
 
@@ -191,7 +197,10 @@ class MemberProcessor {
         if (data) {
             const outPath = path.join(this.extractor.outputDir, member.name);
             const res = this.extractor.soundExtractor.save(data, outPath, member);
-            if (res && res.file) member.soundFile = res.file;
+            if (res && res.file) {
+                member.soundFile = res.file;
+                member.format = res.format;
+            }
         }
     }
 
@@ -202,7 +211,10 @@ class MemberProcessor {
         if (data) {
             const outPath = path.join(this.extractor.outputDir, member.name);
             const res = this.extractor.fontExtractor.save(data, outPath);
-            if (res && res.file) member.fontFile = res.file;
+            if (res && res.file) {
+                member.fontFile = res.file;
+                member.format = res.format;
+            }
         }
     }
 
@@ -211,7 +223,10 @@ class MemberProcessor {
         this.extractor.log('INFO', `Extracting Shape: ${member.name}`);
         const outPath = path.join(this.extractor.outputDir, member.name);
         const res = this.extractor.shapeExtractor.save(outPath, member, palette);
-        if (res && res.file) member.shapeFile = res.file;
+        if (res && res.file) {
+            member.shapeFile = res.file;
+            member.format = res.format;
+        }
     }
 
     async processXtra(member, map) {
@@ -221,7 +236,10 @@ class MemberProcessor {
         if (data) {
             const outPath = path.join(this.extractor.outputDir, `${member.name}.xtra`);
             const res = this.extractor.genericExtractor.save(data, outPath);
-            if (res && res.file) member.xtraFile = res.file;
+            if (res && res.file) {
+                member.xtraFile = res.file;
+                member.format = 'xtra';
+            }
         }
     }
 
@@ -237,7 +255,10 @@ class MemberProcessor {
         if (data) {
             const outPath = path.join(this.extractor.outputDir, member.name);
             const res = this.extractor.vectorShapeExtractor.save(data, outPath, member);
-            if (res && res.file) member.vectorFile = res.file;
+            if (res && res.file) {
+                member.vectorFile = res.file;
+                member.format = res.format;
+            }
         }
     }
 
@@ -249,7 +270,10 @@ class MemberProcessor {
         if (data) {
             const outPath = path.join(this.extractor.outputDir, member.name);
             const res = this.extractor.movieExtractor.save(data, outPath, member);
-            if (res && res.file) member.filmLoopFile = res.file;
+            if (res && res.file) {
+                member.filmLoopFile = res.file;
+                member.format = res.format;
+            }
         }
     }
 

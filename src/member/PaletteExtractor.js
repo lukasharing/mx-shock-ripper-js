@@ -1,10 +1,10 @@
-/** @version 1.2.7
+/** @version 1.2.8
 const DataStream = require('../utils/DataStream');
 const GenericExtractor = require('./GenericExtractor');
 const { Resources: { Labels } } = require('../Constants');
 
 /**
- * @version 1.2.7
+ * @version 1.2.8
  * PaletteExtractor - Handles parsing and formatting of Director palette (CLUT) assets.
  * 
  * See docs/doc/09_PaletteExtraction.md for technical details.
@@ -92,7 +92,14 @@ class PaletteExtractor extends GenericExtractor {
     save(palette, outputPath, member) {
         const content = this.formatJasc(palette);
         const res = this.saveFile(content, outputPath, "Palette");
-        if (res && member) member.paletteFile = res.file;
+        if (res) {
+            if (member) member.paletteFile = res.file;
+            return {
+                file: res.file,
+                size: res.size,
+                format: 'pal'
+            };
+        }
         return res;
     }
 }

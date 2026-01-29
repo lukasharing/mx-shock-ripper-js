@@ -40,3 +40,4 @@ Refer to `Constants.js` for the full Enum `MemberType`. Common IDs:
 -   `4`: Palette
 -   `6`: Sound
 -   `11`: Script
+-   `18`: Vector Shape

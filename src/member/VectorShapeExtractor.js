@@ -1,5 +1,5 @@
 /**
- * @version 1.2.7
+ * @version 1.2.8
  * VectorShapeExtractor.js - Extraction logic for Vector Shape members (Type 18)
  */
 
@@ -10,24 +10,24 @@ class VectorShapeExtractor extends GenericExtractor {
         super(log);
     }
 
-    extract(member) {
-        // TODO: Implement Vector Shape parsing (dvect format)
-        // Returns basic SVG placeholder for now
-        return `<svg xmlns="http://www.w3.org/2000/svg" width="${member.width || 100}" height="${member.height || 100}">
-  <text x="10" y="20" font-family="Arial" font-size="12">VectorShape (ID: ${member.id})</text>
-  <rect x="0" y="0" width="${member.width || 100}" height="${member.height || 100}" fill="none" stroke="red"/>
-</svg>`;
-    }
+    /**
+     * Saves the raw Vector Shape data to a file.
+     * Since the format is undocumented (proprietary binary), we dump the raw generic data.
+     */
+    save(data, outputPath, member) {
+        // We do not have a parser for Vector Shape (Type 18).
+        // Dump the raw content for future analysis.
+        const finalPath = outputPath + '.dat';
+        const result = this.saveFile(data, finalPath, "VectorShape (Raw)");
 
-    save(buffer, outputPath, member) {
-        if (!buffer) return false;
-
-        // 1. Save raw data for future analysis
-        this.saveFile(buffer, outputPath + '.dat', "VectorShape (Raw)");
-
-        // 2. Save SVG placeholder
-        const svg = this.extract(member);
-        return this.saveFile(Buffer.from(svg, 'utf8'), outputPath + '.svg', "VectorShape (SVG)");
+        if (result) {
+            return {
+                file: result.file,
+                size: result.size,
+                format: 'dat'
+            };
+        }
+        return false;
     }
 }
 

@@ -16,7 +16,7 @@ const BitDepth = {
 if (!Alpha.BytesPerPixel) Alpha.BytesPerPixel = 4;
 
 /**
- * @version 1.2.7
+ * @version 1.2.8
  * BitmapExtractor - Deterministic Shockwave Director bitmap (BITD) 
  * parsing and PNG conversion.
  * 
@@ -235,7 +235,7 @@ class BitmapExtractor extends GenericExtractor {
 
             const imgData = PNG.sync.write(dst);
             const result = this.saveFile(imgData, outputPath, "bitmap");
-            if (result) return { width: outputWidth, height: outputHeight, path: result.file };
+            if (result) return { width: outputWidth, height: outputHeight, path: result.file, format: "png" };
 
             return null;
         } catch (e) {

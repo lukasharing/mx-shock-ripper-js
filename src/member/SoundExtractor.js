@@ -1,5 +1,5 @@
 /**
- * @version 1.2.7
+ * @version 1.2.8
  * SoundExtractor.js - Handles extraction and conversion of Director 
  * sound (SND) assets. Supports SWA, MP3, and standard PCM.
  */
@@ -29,9 +29,7 @@ class SoundExtractor extends GenericExtractor {
         }
         // 2. IMA ADPCM (QuickTime / Apple IMA4)
         else if (meta.format === 'ima4') {
-            // TODO: Wrap in AIFC or Decode to WAV. For now, export raw with extension.
-            // Many players can play raw .ima4 if renamed to .aifc providing it has a header, 
-            // but here we just dump the data chunk.
+            // Drop back to .ima4 for now as it's the raw compressed chunk
             if (meta.offset > 0) finalData = buffer.slice(meta.offset);
             ext = '.ima4';
         }
@@ -58,10 +56,9 @@ class SoundExtractor extends GenericExtractor {
 
         if (result) {
             return {
-                soundFile: result.file,
-                soundSize: result.size,
-                extension: ext,
-                metadata: meta
+                file: result.file,
+                size: result.size,
+                format: ext.startsWith('.') ? ext.slice(1) : ext
             };
         }
         return false;

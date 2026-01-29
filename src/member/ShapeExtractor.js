@@ -1,5 +1,5 @@
 /**
- * @version 1.2.7
+ * @version 1.2.8
  * ShapeExtractor.js - Processing and SVG generation for Director Shape members.
  * 
  * See docs/doc/10_ShapeExtraction.md for technical details.
@@ -49,7 +49,15 @@ class ShapeExtractor extends GenericExtractor {
     save(outputPath, member, palette) {
         const svg = this.extract(member, palette);
         const finalPath = outputPath.endsWith('.svg') ? outputPath : outputPath + '.svg';
-        return this.saveFile(Buffer.from(svg, 'utf8'), finalPath, "Shape (SVG)");
+        const result = this.saveFile(Buffer.from(svg, 'utf8'), finalPath, "Shape (SVG)");
+        if (result) {
+            return {
+                file: result.file,
+                size: result.size,
+                format: 'svg'
+            };
+        }
+        return false;
     }
 }
 
