@@ -16,7 +16,7 @@ const BitDepth = {
 if (!Alpha.BytesPerPixel) Alpha.BytesPerPixel = 4;
 
 /**
- * @version 1.2.8
+ * @version 1.2.9
  * BitmapExtractor - Deterministic Shockwave Director bitmap (BITD) 
  * parsing and PNG conversion.
  * 

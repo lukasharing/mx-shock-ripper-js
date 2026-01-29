@@ -1,5 +1,5 @@
 /**
- * @version 1.2.8
+ * @version 1.2.9
  * CastMember.js - Metadata & geometric state for a single Cast Member
  * 
  * This class encapsulates the dual-nature of Director resources: the standardized 
@@ -40,6 +40,7 @@ class CastMember {
         this.modified = properties.modified || null;
         this.comment = properties.comment || null;
         this.bitDepth = properties.bitDepth || 8;
+        this.format = properties.format || null;
 
         // Internal Tracking Properties (Post-Processed)
         this.width = properties.width || 0;
@@ -233,14 +234,6 @@ class CastMember {
             created: this.created,
             modified: this.modified,
             flags: this.flags,
-            scriptFile: this.scriptFile,
-            textFile: this.textFile,
-            fontFile: this.fontFile,
-            soundFile: this.soundFile,
-            shapeFile: this.shapeFile,
-            xtraFile: this.xtraFile,
-            vectorFile: this.vectorFile,
-            filmLoopFile: this.filmLoopFile,
             palette: (this.palette && !Array.isArray(this.palette)) ? this.palette : undefined,
             shapeType: this.shapeType,
             pattern: this.pattern,
@@ -249,11 +242,10 @@ class CastMember {
             lineSize: this.lineSize,
             lineDir: this.lineDir,
             scriptType: this.scriptType,
+            format: this.format,
             checksum: this.checksum
         };
 
-        if (this.images) obj.images = this.images;
-        if (this.image) obj.image = this.image;
         if (this.rect && (this.rect.right !== 0 || this.rect.bottom !== 0)) obj.rect = this.rect;
 
         // Prune empty or redundant fields for production JSON

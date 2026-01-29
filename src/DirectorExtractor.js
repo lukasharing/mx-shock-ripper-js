@@ -1,5 +1,5 @@
 /**
- * @version 1.2.8
+ * @version 1.2.9
  * DirectorExtractor.js - Refactored modular orchestrator for Director assets
  */
 
@@ -152,7 +152,7 @@ class DirectorExtractor extends BaseExtractor {
                 if (decompiled?.text) {
                     const outPath = path.join(this.outputDir, `${scripts[i].name}.ls`);
                     fs.writeFileSync(outPath, decompiled.text);
-                    scripts[i].scriptFile = `${scripts[i].name}.ls`;
+                    scripts[i].format = 'ls';
                 }
             }
         }

@@ -159,7 +159,7 @@ class MetadataManager {
 
         member.checksum = crypto.createHash('sha256').update(data).digest('hex');
         if (!member.name) member.name = `member_${memberId}`;
-        member.name = member.name.replace(/[^a-zA-Z0-9_\-\.]/g, '_').trim();
+        member.name = member.name.trim();
 
         const typeName = CastMember.getTypeName(member.typeId);
         this.extractor.stats.total++;
