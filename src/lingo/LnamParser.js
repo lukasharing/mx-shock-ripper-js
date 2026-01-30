@@ -9,7 +9,7 @@ const DataStream = require('../utils/DataStream');
 
 class LnamParser {
     constructor(logger) {
-        this.log = logger || console.log;
+        this.log = logger || ((lvl, msg) => { });
     }
 
     /**

@@ -12,6 +12,7 @@ const path = require('path');
 const DirectorFile = require('./DirectorFile');
 const CastMember = require('./CastMember');
 const DataStream = require('./utils/DataStream');
+const { Palette } = require('./utils/Palette');
 const { Color } = require('./utils/Color');
 const { Magic, KeyTableValues } = require('./Constants');
 
@@ -25,7 +26,7 @@ class ProjectExtractor {
         this.entryPath = entryPath;
         this.baseDir = path.dirname(entryPath);
         this.options = options;
-        this.log = logger || ((lvl, msg) => console.log(`[ProjectExtractor][${lvl}] ${msg}`));
+        this.log = logger || ((lvl, msg) => { });
         this.loadedCasts = [];
         this.globalPalettes = [];
         this.isReady = false;
@@ -112,7 +113,9 @@ class ProjectExtractor {
     }
 
     /**
-     * Parses the MCsL (Movie Cast List) to identify external dependencies.
+     * Scans for linked cast files by parsing strings in the MCsL chunk.
+     * TODO: UNCERTAINTY: This uses regex/string heuristics and might miss files with non-standard extensions 
+     * or platform-specific separator logic (Mac COLON vs Win BACKSLASH).
      */
     async discoverLinkedCasts(df) {
         const mcsl = df.chunks.find(c => [Magic.MCsL, 'Lscl'].includes(c.type));
@@ -150,8 +153,8 @@ class ProjectExtractor {
      */
     buildGlobalPaletteList() {
         this.globalPalettes = [
-            { colors: Color.getMacSystem7(), name: "System_Mac", source: "System" },
-            { colors: Color.getWindowsSystem(), name: "System_Win", source: "System" }
+            { colors: Palette.getMacSystem7(), name: "System_Mac", source: "System" },
+            { colors: Palette.getWindowsSystem(), name: "System_Win", source: "System" }
         ];
 
         for (const cast of this.loadedCasts) {
@@ -163,30 +166,10 @@ class ProjectExtractor {
     }
 
     /**
-     * Parses raw CLUT data, handling 3-byte and 4-byte channel structures.
+     * Parses raw CLUT data.
      */
     parseRawColors(buffer) {
-        if (!buffer || buffer.length === 0) return null;
-        const colors = [];
-        let offset = 0;
-
-        if (buffer.length === 768) offset = 0;
-        else if (buffer.length > 768 && (buffer.length - 768) < 20) offset = buffer.length - 768;
-
-        for (let i = offset; i < buffer.length; i += 3) {
-            if (colors.length >= 256 || i + 3 > buffer.length) break;
-            colors.push([buffer[i], buffer[i + 1], buffer[i + 2]]);
-        }
-
-        if (colors.length < 255 && buffer.length >= 1024) {
-            colors.length = 0;
-            offset = buffer.length === 1024 ? 0 : (buffer.length - 1024);
-            for (let i = offset; i < buffer.length; i += 4) {
-                if (colors.length >= 256) break;
-                colors.push([buffer[i], buffer[i + 1], buffer[i + 2]]);
-            }
-        }
-        return colors.length > 0 ? colors : null;
+        return Palette.parseDirector(buffer);
     }
 
     getPalette(id) {

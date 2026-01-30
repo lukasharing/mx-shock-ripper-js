@@ -21,24 +21,6 @@ class MetadataManager {
         if (!keyChunk) return;
 
         const data = await this.extractor.dirFile.getChunkData(keyChunk);
-        if (!data) return;
-
-        const ds = new DataStream(data, this.extractor.dirFile.ds.endianness);
-        let firstWord = ds.readUint16();
-
-        if (firstWord === 0x4B45 || firstWord === 0x454B) {
-            ds.seek(0);
-            ds.readFourCC();
-            firstWord = ds.readUint16();
-        }
-
-        if (firstWord > 255) {
-            ds.endianness = ds.endianness === 'big' ? 'little' : 'big';
-            ds.seek(2);
-            firstWord = ds.readUint16();
-        }
-
-        let headerSize = firstWord === 12 ? 12 : 20;
 
         // Safety check: if buffer is too small for 20-byte header, downgrade to 12 (or abort if too small for 12)
         if (headerSize === 20 && data.length < 20) {
@@ -157,9 +139,16 @@ class MetadataManager {
         const memberId = this.resToMember[chunk.id] || chunk.id;
         const member = CastMember.fromChunk(memberId, data, this.extractor.dirFile.ds.endianness);
 
-        member.checksum = crypto.createHash('sha256').update(data).digest('hex');
         if (!member.name) member.name = `member_${memberId}`;
         member.name = member.name.trim();
+
+        // Checksum includes raw data + critical metadata (name + type)
+        // This ensures renamed members or type-changed members get new checksums even if binary data is identical.
+        const hash = crypto.createHash('sha256');
+        hash.update(data);
+        hash.update(member.name);
+        hash.update(CastMember.getTypeName(member.typeId));
+        member.checksum = hash.digest('hex');
 
         const typeName = CastMember.getTypeName(member.typeId);
         this.extractor.stats.total++;

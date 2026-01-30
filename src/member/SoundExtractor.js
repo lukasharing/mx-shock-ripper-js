@@ -140,6 +140,7 @@ class SoundExtractor extends GenericExtractor {
                 if (encode === 0xFF || encode === 0xFD) {
                     // Extended Sound Header
                     // encodeDependent = numChannels in this case (from ProjectorRays logic/Mac specs)
+                    // Verified: ProjectorRays also checks for 0xFF or 0xFD and treats encodeDependent as numChannels.
                     meta.numChannels = encodeDependent;
 
                     ds.readUint32(); // numSamples
@@ -150,6 +151,7 @@ class SoundExtractor extends GenericExtractor {
                     ds.skip(14); // futureUse1(2), futureUse2(4), futureUse3(4), futureUse4(4)
 
                     // Director Specific: count of samples to skip (often for encoder delay)
+                    // Verified: ProjectorRays reads this uint32 as 'skipSamples' immediately after the extended header.
                     const skipSamples = ds.readUint32();
 
                     // If we successfully parsed this far, and we haven't identified a codec yet,

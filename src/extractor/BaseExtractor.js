@@ -21,8 +21,6 @@ class BaseExtractor {
 
     log(lvl, msg) {
         this.extractionLog.push({ timestamp: new Date().toISOString(), lvl, msg });
-        const color = lvl === 'ERROR' ? '\x1b[31m' : (lvl === 'SUCCESS' ? '\x1b[32m' : '\x1b[0m');
-        console.log(`${color}[DirectorExtractor][${lvl}] ${msg}\x1b[0m`);
     }
 
     saveJSON() {

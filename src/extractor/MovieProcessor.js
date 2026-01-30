@@ -141,7 +141,12 @@ class MovieProcessor {
         if (!data) return;
 
         const ds = new DataStream(data, 'big');
+        // Structure: [Total Len: 4] [Unknown: 2] [Cast Count: 2] [Items Per Cast: 2]
         const dataOffset = ds.readUint32();
+        if (dataOffset >= data.length) {
+            this.extractor.log('WARN', `Invalid cast list data offset: ${dataOffset}. Skipping cast extraction.`);
+            return;
+        }
         ds.skip(2);
         const castCount = ds.readUint16();
         const itemsPerCast = ds.readUint16();
@@ -186,10 +191,10 @@ class MovieProcessor {
             }
             if (pathStr && (pathStr.includes('\\') || pathStr.includes('/')) && !pathStr.toLowerCase().match(/\.(cst|cct|dcr|dir)$/)) pathStr += '.cst';
             if (name.toLowerCase() === 'internal') continue;
-            castList.push({ name, path: pathStr, preloadMode });
+            castList.push({ index: i + 1, name, path: pathStr, preloadMode });
         }
 
-        if (castList.length > 0) fs.writeFileSync(path.join(this.extractor.outputDir, 'castlibs.json'), JSON.stringify({ casts: castList }, null, 2));
+        if (castList.length > 0) this.extractor.castLibs = castList;
     }
 }
 

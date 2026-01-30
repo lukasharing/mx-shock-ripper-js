@@ -1,6 +1,6 @@
 /**
- * @version 1.3.2
- * DirectorExtractor.js - Refactored modular orchestrator for Director assets
+ * @version 1.4.0
+ * DirectorExtractor - Orchestrates extraction of Director RIFX files.
  */
 
 const fs = require('fs');
@@ -13,21 +13,10 @@ const MovieProcessor = require('./extractor/MovieProcessor');
 const MemberProcessor = require('./extractor/MemberProcessor');
 const ScriptHandler = require('./extractor/ScriptHandler');
 
-const TextExtractor = require('./member/TextExtractor');
-const BitmapExtractor = require('./member/BitmapExtractor');
-const PaletteExtractor = require('./member/PaletteExtractor');
-const ScriptExtractor = require('./member/ScriptExtractor');
-const SoundExtractor = require('./member/SoundExtractor');
-const ShapeExtractor = require('./member/ShapeExtractor');
-const FontExtractor = require('./member/FontExtractor');
-const GenericExtractor = require('./member/GenericExtractor');
-const LnamParser = require('./lingo/LnamParser');
-const VectorShapeExtractor = require('./member/VectorShapeExtractor');
-const MovieExtractor = require('./member/MovieExtractor');
-const LingoDecompiler = require('./lingo/LingoDecompiler');
-
-const { Magic, MemberType } = require('./Constants');
+const { MemberType, Magic } = require('./Constants');
+const { Palette, PALETTES } = require('./utils/Palette');
 const { Color } = require('./utils/Color');
+const Logger = require('./utils/Logger');
 
 class DirectorExtractor extends BaseExtractor {
     constructor(inputPath, outputDir, options = {}) {
@@ -48,21 +37,8 @@ class DirectorExtractor extends BaseExtractor {
             lasm: options.lasm ?? false
         });
 
-        const logProxy = (lvl, msg) => this.log(lvl, msg);
-
-        // Member Extractors
-        this.textExtractor = new TextExtractor(logProxy);
-        this.bitmapExtractor = new BitmapExtractor(logProxy, Color, 0);
-        this.paletteExtractor = new PaletteExtractor(logProxy);
-        this.scriptExtractor = new ScriptExtractor(logProxy);
-        this.soundExtractor = new SoundExtractor(logProxy);
-        this.shapeExtractor = new ShapeExtractor(logProxy);
-        this.fontExtractor = new FontExtractor(logProxy);
-        this.genericExtractor = new GenericExtractor(logProxy);
-        this.lingoDecompiler = new LingoDecompiler(logProxy);
-        this.lnamParser = new LnamParser(logProxy);
-        this.vectorShapeExtractor = new VectorShapeExtractor(logProxy);
-        this.movieExtractor = new MovieExtractor(logProxy);
+        // Use the new standard Logger
+        this.logger = new Logger('DirectorExtractor', (lvl, msg) => super.log(lvl, msg));
 
         // Core Systems
         this.metadataManager = new MetadataManager(this);
@@ -72,8 +48,39 @@ class DirectorExtractor extends BaseExtractor {
 
         this.dirFile = null;
         this.members = [];
+        this.castLibs = [];
         this.sharedPalettes = {};
         this.defaultMoviePalette = null;
+
+        // Lazy instances
+        this._extractors = {};
+    }
+
+    // Dynamic getters for lazy-loading to optimize memory
+    get textExtractor() { return this._getExtractor('TextExtractor', './member/TextExtractor'); }
+    get bitmapExtractor() { return this._getExtractor('BitmapExtractor', './member/BitmapExtractor', [Palette, 0]); }
+    get paletteExtractor() { return this._getExtractor('PaletteExtractor', './member/PaletteExtractor'); }
+    get scriptExtractor() { return this._getExtractor('ScriptExtractor', './member/ScriptExtractor'); }
+    get soundExtractor() { return this._getExtractor('SoundExtractor', './member/SoundExtractor'); }
+    get shapeExtractor() { return this._getExtractor('ShapeExtractor', './member/ShapeExtractor'); }
+    get fontExtractor() { return this._getExtractor('FontExtractor', './member/FontExtractor'); }
+    get genericExtractor() { return this._getExtractor('GenericExtractor', './member/GenericExtractor'); }
+    get lingoDecompiler() { return this._getExtractor('LingoDecompiler', './lingo/LingoDecompiler'); }
+    get lnamParser() { return this._getExtractor('LnamParser', './lingo/LnamParser'); }
+    get vectorShapeExtractor() { return this._getExtractor('VectorShapeExtractor', './member/VectorShapeExtractor'); }
+    get movieExtractor() { return this._getExtractor('MovieExtractor', './member/MovieExtractor'); }
+
+    _getExtractor(name, requirePath, args = []) {
+        if (!this._extractors[name]) {
+            const ExtractorClass = require(requirePath);
+            const logProxy = (lvl, msg) => this.log(lvl, msg);
+            this._extractors[name] = new ExtractorClass(logProxy, ...args);
+        }
+        return this._extractors[name];
+    }
+
+    log(lvl, msg) {
+        this.logger.log(lvl, msg);
     }
 
     async extract() {
@@ -118,6 +125,7 @@ class DirectorExtractor extends BaseExtractor {
 
         // Phase 5: Cleanup & Finalization
         await this.matchDanglingScripts();
+        this.finalizeCastLibs();
         this.metadata.members = this.members.map(m => m.toJSON());
         this.saveJSON();
         this.saveLog();
@@ -156,6 +164,35 @@ class DirectorExtractor extends BaseExtractor {
                 }
             }
         }
+    }
+
+    finalizeCastLibs() {
+        if (this.castLibs.length === 0) return;
+
+        const crypto = require('crypto');
+
+        for (const castLib of this.castLibs) {
+            // CastLib logic: (id >> 16) + 1 matches standard Director runtime behavior where CastLibs are segmented by 65536.
+            // Verified against ProjectorRays 'minMember' logic which typically aligns with this structure.
+            // Edge case: If 'minMember' in MCsL is arbitrary and not aligned to 65536 boundaries, this might fail,
+            // but standard Director files adhere to this.
+            const libIndex = castLib.index;
+            const libMembers = this.members
+                .filter(m => (m.id >> 16) + 1 === libIndex)
+                .sort((a, b) => a.id - b.id);
+
+            if (libMembers.length > 0) {
+                const compositeChecksum = libMembers.map(m => m.checksum).join('');
+                if (compositeChecksum) {
+                    castLib.checksum = crypto.createHash('sha256').update(compositeChecksum).digest('hex');
+                }
+            } else {
+                // Empty CastLib gets a consistent hash of an empty string
+                castLib.checksum = crypto.createHash('sha256').update('').digest('hex');
+            }
+        }
+
+        fs.writeFileSync(path.join(this.outputDir, 'castlibs.json'), JSON.stringify({ casts: this.castLibs }, null, 2));
     }
 }
 

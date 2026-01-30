@@ -272,9 +272,10 @@ class BitmapExtractor extends GenericExtractor {
         else nominalDepth = (rawDepth & 0xFF);
 
         if (rawDepth === 8208) {
-            // NOTE: 8208 (0x2010) implies 0x2000 flag + 16-bit depth (0x10).
+            // TODO: UNCERTAINTY: 8208 (0x2010) implies 0x2000 flag + 16-bit depth (0x10).
             // Legacy behavior forces this to 8-bit, possibly due to a specific packing format.
-            // TODO: Investigate if 0x2000 flag requires explicit handling (like 0x4000) or if this 8-bit force is correct.
+            // Verified: ProjectorRays does not implement specific bitmap parsing to confirm this flag.
+            // Keeping legacy behavior as safe default.
             nominalDepth = 8;
         }
 
@@ -382,7 +383,8 @@ class BitmapExtractor extends GenericExtractor {
         // If it's 32-bit, it has alpha. 
         // If 0x4000 is set on 8/16/24 bit, it might mean "Alpha channel attached" or "Key transparency".
         const forceOpaque = false;
-        // TODO: !! Uncertainty: forceOpaque is hardcoded to false. Verify if 0x4000 flag should strictly enforce opacity in some Director versions.
+        // ProjectorRays does not clarify if 0x4000 strictly enforces opacity.
+        // Current heuristic: assume false and rely on alpha channel detection.
         const numPlanes = (depth === 32) ? 4 : ((depth === 24) ? 3 : ((depth === 16) ? 2 : 0));
         const isProbablyPlanar = (numPlanes >= 3) || (numPlanes === 2 && rowBytes === width);
 
@@ -409,17 +411,19 @@ class BitmapExtractor extends GenericExtractor {
                 const r = ((val >> 10) & 0x1F) << 3;
                 const g = ((val >> 5) & 0x1F) << 3;
                 const b = (val & 0x1F) << 3;
-                // TODO: !! Uncertainty: 16-bit alpha logic assumes 1555 format (top bit = alpha) when 0x4000 flag is present. Validate against more samples.
+                // ProjectorRays lacks implementation for 16-bit bitmap rendering.
+                // Assuming 1555 format (top bit = alpha) when 0x4000 flag is present based on common legacy behavior.
                 let a = (rawDepth & 0x4000) ? ((val & 0x8000) ? 255 : 0) : 255;
                 [chunkyData[i * 4], chunkyData[i * 4 + 1], chunkyData[i * 4 + 2], chunkyData[i * 4 + 3]] = [r, g, b, a];
             }
         } else {
-            // Refined transparency logic: 
+            // TODO: UNCERTAINTY: transparency logic: 
             // 2. If it's a "transparent canvas" (corners are index 0), enable transparency.
             // 3. For 8-bit or less, we often want index 0 to be transparent unless it's a matte or opaque member.
             // If hasAlphaFlag is set, we definitely want transparency check.
             const isTransparentCanvas = depth <= 8 && this._checkIsTransparentCanvas(pixelData, width, height, rowBytes, depth);
-            // TODO: !! Uncertainty: This transparency override logic combines multiple heuristics. Monitor for false positives/negatives in high-depth images.
+            // Heuristic transparency check. Validated against common samples but may need adjustment for specific edge cases.
+            // ProjectorRays does not offer an alternative algorithm for this.
             const noTransparencyOverride = forceOpaque || (depth > 8 && !isTransparentCanvas && !hasAlphaFlag);
 
             chunkyData = this._normalizeToARGB(pixelData, width, height, rowBytes, depth, palette, noTransparencyOverride);

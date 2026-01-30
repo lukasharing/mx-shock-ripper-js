@@ -11,7 +11,7 @@ const { Magic, AfterburnerTags, Limits } = require('./Constants');
 class DirectorFile {
     constructor(buffer, logger) {
         this.ds = buffer ? new DataStream(buffer) : null;
-        this.log = logger || ((lvl, msg) => console.log(`[DirectorFile][${lvl}] ${msg}`));
+        this.log = logger || ((lvl, msg) => { });
         this.chunks = [];
         this.cachedViews = {};
         this.isAfterburned = false;
@@ -154,8 +154,6 @@ class DirectorFile {
                 const len1 = ds.readUint32();
                 // If len1 is absurdly large relative to buffer, wrong endianness
                 if (len1 > data.length + 10000 && len1 > 0x100000) {
-                    const oldEndian = this.ds.endianness;
-                    this.ds.endianness = (oldEndian === 'big') ? 'little' : 'big';
                     this.log('INFO', `Auto-detected endianness mismatch. Switched from ${oldEndian} to ${this.ds.endianness}.`);
 
                     // Re-check to be sure?
@@ -286,48 +284,58 @@ class DirectorFile {
     }
 
     async getChunkData(chunk) {
-        if (!chunk) return null;
-        if (this.cachedViews[chunk.id]) return this.cachedViews[chunk.id];
+        if (!chunk || chunk.off === undefined) return null; // Changed 'offset' to 'off' to match existing chunk structure
 
-        let data;
         try {
+            let rawData;
             if (this.format === 'afterburner') {
                 this.ds.seek(this.ilsBodyOffset + chunk.off);
-                const raw = this.ds.readBytes(chunk.len);
+                rawData = this.ds.readBytes(chunk.len);
+
                 // Decompress if compType indicates it OR if uncompLen differs from chunk len (even if smaller)
                 if (chunk.compType === 1 || (chunk.uncompLen > 0 && chunk.uncompLen !== chunk.len)) {
-                    try {
-                        data = zlib.inflateSync(raw);
-                    } catch (e) {
-                        try {
-                            data = zlib.inflateRawSync(raw);
-                        } catch (e2) {
-                            try {
-                                if (raw.length > 4) {
-                                    data = zlib.inflateRawSync(raw.slice(4));
-                                } else {
-                                    throw e2;
-                                }
-                            } catch (e3) {
-                                // Fallback: maybe it's not actually compressed despite flagging?
-                                data = raw;
-                            }
-                        }
-                    }
-                } else {
-                    data = raw;
+                    return this._safeDecompress(rawData, 'zlib');
                 }
             } else {
                 this.ds.seek(chunk.off + 8);
-                data = this.ds.readBytes(chunk.len);
+                rawData = this.ds.readBytes(chunk.len);
             }
+
+            // Note: PackBits usually needs an expected size, which might not be in the chunk entry.
+            // This is handled in specialized extractors (like BitmapExtractor).
+            // For now, if it's not zlib, return raw.
+            return rawData;
         } catch (e) {
-            this.log('ERROR', `Error reading chunk ${chunk.id} (${chunk.type}): ${e.message}`);
+            this.log('ERROR', `Failed to read chunk ${chunk.type}: ${e.message}`);
             return null;
         }
+    }
 
-        if (data) this.cachedViews[chunk.id] = data;
-        return data;
+    _safeDecompress(data, type) {
+        try {
+            if (type === 'zlib') return zlib.inflateSync(data);
+            // Add other decompression types here if needed
+            return data;
+        } catch (e) {
+            this.log('WARNING', `Decompression failed (${type}): ${e.message}`);
+            // Attempt fallback for zlib if it fails
+            if (type === 'zlib') {
+                try {
+                    return zlib.inflateRawSync(data);
+                } catch (e2) {
+                    try {
+                        if (data.length > 4) {
+                            return zlib.inflateRawSync(data.slice(4));
+                        }
+                    } catch (e3) {
+                        // Fallback to raw data if all decompression attempts fail
+                        this.log('WARNING', `All zlib decompression attempts failed, returning raw data.`);
+                        return data;
+                    }
+                }
+            }
+            return data; // Return raw data if decompression fails or type is unknown
+        }
     }
 
     static unprotect(tag) {

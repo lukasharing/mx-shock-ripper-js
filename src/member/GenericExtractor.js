@@ -14,7 +14,7 @@ class GenericExtractor {
      * @param {Function} log - Logger callback (lvl, msg)
      */
     constructor(log) {
-        this.log = log || ((lvl, msg) => console.log(`[${lvl}] ${msg}`));
+        this.log = log || ((lvl, msg) => { });
     }
 
     /**

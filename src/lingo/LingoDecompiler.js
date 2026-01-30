@@ -28,7 +28,7 @@ class LingoStack {
 }
 
 class LingoDecompiler {
-    constructor(logger) { this.log = logger || console.log; }
+    constructor(logger) { this.log = logger || ((lvl, msg) => { }); }
 
     /**
      * Main entry point for decompiling a Lingo script.
