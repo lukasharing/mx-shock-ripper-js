@@ -1,439 +1,314 @@
-const GenericExtractor = require('./GenericExtractor');
-const fs = require('fs');
-const path = require('path');
 const zlib = require('zlib');
 const { PNG } = require('pngjs');
+const fs = require('fs');
+const BaseExtractor = require('../extractor/BaseExtractor');
 const DataStream = require('../utils/DataStream');
-const { Bitmap, Limits, HeaderSize } = require('../Constants');
-const { BitMask, BitDepth: BitDepthArray, BitmapFlags, Alpha } = Bitmap;
+const { Bitmap, MemberType, HeaderSize } = require('../Constants');
 
-// Add named constants for compatibility with stable BitmapExtractor
 const BitDepth = {
-    Depth1: 1, Depth2: 2, Depth4: 4, Depth8: 8,
-    Depth16: 16, Depth24: 24, Depth32: 32, BitsPerByte: 8
+    Depth1: 1,
+    Depth2: 2,
+    Depth4: 4,
+    Depth8: 8,
+    Depth16: 16,
+    Depth32: 32
 };
-// Extend Alpha with BytesPerPixel
-if (!Alpha.BytesPerPixel) Alpha.BytesPerPixel = 4;
 
-/**
- * @version 1.3.0
- * BitmapExtractor - Deterministic Shockwave Director bitmap (BITD) 
- * parsing and PNG conversion.
- * 
- * See docs/doc/06_BitmapExtraction.md for technical details.
- */
-class BitmapExtractor extends GenericExtractor {
-    constructor(logger, palettes, fileVersion) {
+class BitmapExtractor extends BaseExtractor {
+    constructor(logger, extractor, compressionThreshold = 0) {
         super(logger);
-        this.palettes = palettes;
-        this.fileVersion = fileVersion;
-        this.internalPalette = null;
+        this.extractor = extractor;
+        this.compressionThreshold = compressionThreshold;
     }
 
-    setInternalPalette(palette) {
-        this.internalPalette = palette;
-    }
+    async extract(bitmapBuf, outputPath, member, customPalette = null, alphaBuf = null) {
+        if (!bitmapBuf || bitmapBuf.length === 0) return null;
 
-    // Compatibility wrapper - DirectorExtractor calls extract() but this class uses save()
-    async extract(bitmapBuf, outputPath, member, palette, alphaBuf = null) {
-        const castRect = { top: 0, left: 0, bottom: member.height || 0, right: member.width || 0 };
-        return await this.save(bitmapBuf, castRect, outputPath, member, member.endianness || 'big', alphaBuf, palette);
-    }
-
-    /**
-     * Reconstructs interleaved or stacked planar pixel data into a chunky ARGB buffer.
-     * @private
-     */
-    _reconstructPlanar(pixelData, width, height, rowBytes, depth, numPlanes, palette) {
-        const interleaved = this._reconstructPlanarInternal(pixelData, width, height, rowBytes, depth, numPlanes, palette, true);
-        const stacked = this._reconstructPlanarInternal(pixelData, width, height, rowBytes, depth, numPlanes, palette, false);
-        const isExactlyInterleaved = (rowBytes === width * numPlanes);
-        if (isExactlyInterleaved && interleaved) return interleaved;
-        return stacked || interleaved;
-    }
-
-    _reconstructPlanarInternal(pixelData, width, height, rowBytes, depth, numPlanes, palette, interleaved) {
-        try {
-            const chunky = Buffer.alloc(width * height * Alpha.BytesPerPixel);
-            const planeSize = width * height;
-            for (let y = 0; y < height; y++) {
-                for (let x = 0; x < width; x++) {
-                    const dstOff = (y * width + x) * Alpha.BytesPerPixel;
-                    let r, g, b, a = Alpha.Opaque;
-                    if (interleaved) {
-                        const rowOff = y * rowBytes;
-                        if (rowOff + x + width * (numPlanes - 1) >= pixelData.length) continue;
-                        if (numPlanes === 4) {
-                            [a, r, g, b] = [pixelData[rowOff + x], pixelData[rowOff + x + width], pixelData[rowOff + x + width * 2], pixelData[rowOff + x + width * 3]];
-                        } else if (numPlanes === 3) {
-                            [r, g, b] = [pixelData[rowOff + x], pixelData[rowOff + x + width], pixelData[rowOff + x + width * 2]];
-                        } else if (numPlanes === 2) {
-                            a = pixelData[rowOff + x];
-                            [r, g, b] = palette[pixelData[rowOff + x + width]] || [0, 0, 0];
-                        }
-                    } else {
-                        const off = y * width + x;
-                        if (off + planeSize * (numPlanes - 1) >= pixelData.length) continue;
-                        if (numPlanes === 4) {
-                            [a, r, g, b] = [pixelData[off], pixelData[off + planeSize], pixelData[off + planeSize * 2], pixelData[off + planeSize * 3]];
-                        } else if (numPlanes === 3) {
-                            [r, g, b] = [pixelData[off], pixelData[off + planeSize], pixelData[off + planeSize * 2]];
-                        } else if (numPlanes === 2) {
-                            a = pixelData[off];
-                            [r, g, b] = palette[pixelData[off + planeSize]] || [0, 0, 0];
-                        }
-                    }
-                    chunky[dstOff + 0] = r || 0;
-                    chunky[dstOff + 1] = g || 0;
-                    chunky[dstOff + 2] = b || 0;
-                    chunky[dstOff + 3] = (a !== undefined) ? a : Alpha.Opaque;
-                }
-            }
-            return { pixelData: chunky, bitdHeight: height, rowBytes: width * Alpha.BytesPerPixel, depth: BitDepth.Depth32 };
-        } catch (e) { return null; }
-    }
-
-    /**
-     * Normalizes indexed or high-depth pixel data into a 32-bit ARGB buffer.
-     * @private
-     */
-    _normalizeToARGB(pixelData, width, height, rowBytes, depth, palette, noTransparency) {
-        const chunky = Buffer.alloc(width * height * Alpha.BytesPerPixel);
-        const ds = new DataStream(pixelData, 'big');
-        const readSafe = () => (ds.position < pixelData.length) ? ds.readUint8() : 0;
-
-        // Use Color.getGrayscale() if palette is missing and depth is 8
-        const effectivePalette = (depth === 8 && (!palette || palette.length === 0)) ? this.palettes.getGrayscale() : palette;
-
-        for (let y = 0; y < height; y++) {
-            ds.seek(y * (rowBytes || Math.ceil((width * depth) / BitDepth.BitsPerByte)));
-            for (let x = 0; x < width; x++) {
-                const dstIdx = (y * width + x) * Alpha.BytesPerPixel;
-                if (depth === 1) {
-                    const bytePos = (y * rowBytes) + Math.floor(x / 8);
-                    const byteVal = (bytePos < pixelData.length) ? pixelData[bytePos] : 0;
-                    const val = (byteVal >> (7 - (x % 8))) & 1;
-                    const color = effectivePalette[val] || [0, 0, 0];
-                    const alpha = (val === 0 && !noTransparency) ? Alpha.Transparent : Alpha.Opaque;
-                    [chunky[dstIdx], chunky[dstIdx + 1], chunky[dstIdx + 2], chunky[dstIdx + 3]] = [...color, alpha];
-                } else if (depth === 2) {
-                    const bytePos = (y * rowBytes) + Math.floor(x / 4);
-                    const byteVal = (bytePos < pixelData.length) ? pixelData[bytePos] : 0;
-                    const val = (byteVal >> (6 - (x % 4) * 2)) & 0x03;
-                    const color = effectivePalette[val] || [0, 0, 0];
-                    const alpha = (val === 0 && !noTransparency) ? Alpha.Transparent : Alpha.Opaque;
-                    [chunky[dstIdx], chunky[dstIdx + 1], chunky[dstIdx + 2], chunky[dstIdx + 3]] = [...color, alpha];
-                } else if (depth === 4) {
-                    const bytePos = (y * rowBytes) + Math.floor(x / 2);
-                    const byteVal = (bytePos < pixelData.length) ? pixelData[bytePos] : 0;
-                    const val = (byteVal >> (4 - (x % 2) * 4)) & 0x0F;
-                    const color = effectivePalette[val] || [0, 0, 0];
-                    const alpha = (val === 0 && !noTransparency) ? Alpha.Transparent : Alpha.Opaque;
-                    [chunky[dstIdx], chunky[dstIdx + 1], chunky[dstIdx + 2], chunky[dstIdx + 3]] = [...color, alpha];
-                } else if (depth === BitDepth.Depth32) {
-                    const [a, r, g, b] = [readSafe(), readSafe(), readSafe(), readSafe()];
-                    [chunky[dstIdx], chunky[dstIdx + 1], chunky[dstIdx + 2], chunky[dstIdx + 3]] = [r, g, b, a];
-                } else if (depth === BitDepth.Depth24) {
-                    const [r, g, b] = [readSafe(), readSafe(), readSafe()];
-                    [chunky[dstIdx], chunky[dstIdx + 1], chunky[dstIdx + 2], chunky[dstIdx + 3]] = [r, g, b, Alpha.Opaque];
-                } else {
-                    const palIdx = readSafe();
-                    const color = effectivePalette[palIdx] || [0, 0, 0];
-                    const alpha = (palIdx === 0 && !noTransparency) ? Alpha.Transparent : Alpha.Opaque;
-                    [chunky[dstIdx], chunky[dstIdx + 1], chunky[dstIdx + 2], chunky[dstIdx + 3]] = [...color, alpha];
-                }
-            }
+        // 1. Geometry sets
+        // Prioritize SPEC dimensions over Cast metadata dimensions for Habbo
+        const dimSets = [];
+        if (member._initialRect) {
+            const r = member._initialRect;
+            const w = Math.abs(r.right - r.left);
+            const h = Math.abs(r.bottom - r.top);
+            if (w > 0 && h > 0) dimSets.push({ w, h, source: 'Spec' });
         }
-        return chunky;
-    }
-
-    /**
-     * Checks if the corners of an indexed bitmap are transparent (index 0).
-     * @private
-     */
-    _checkIsTransparentCanvas(pixelData, width, height, rowBytes, depth) {
-        if (depth > BitDepth.Depth8) return false;
-        const getIndex = (x, y) => {
-            const rb = rowBytes || Math.ceil((width * depth) / BitDepth.BitsPerByte);
-            const pos = (y * rb);
-            if (depth === BitDepth.Depth8) return pixelData[pos + x];
-            if (depth === BitDepth.Depth4) { const b = pixelData[pos + Math.floor(x / 2)]; return (x % 2 === 0) ? (b >> 4) : (b & 0x0F); }
-            if (depth === BitDepth.Depth2) { const b = pixelData[pos + Math.floor(x / 4)]; return (b >> (6 - (x % 4) * 2)) & 0x03; }
-            if (depth === BitDepth.Depth1) { const b = pixelData[pos + Math.floor(x / 8)]; return (b >> (7 - (x % 8))) & 1; }
-            return 0;
-        };
-        try {
-            const corners = [getIndex(0, 0), getIndex(width - 1, 0), getIndex(0, height - 1), getIndex(width - 1, height - 1)];
-            return corners.every(c => c === 0);
-        } catch (e) { return false; }
-    }
-
-    /**
-     * Standard PackBits decompression algorithm.
-     */
-    decompressPackBits(data, expectedSize) {
-        const output = Buffer.alloc(expectedSize);
-        let outIdx = 0, inIdx = 0;
-        while (outIdx < expectedSize && inIdx < data.length) {
-            let b = data.readInt8(inIdx++);
-            if (b >= 0) {
-                let count = b + 1;
-                for (let i = 0; i < count && outIdx < expectedSize; i++) output[outIdx++] = data[inIdx++];
-            } else if (b !== -128) {
-                let count = -b + 1;
-                let val = data[inIdx++];
-                for (let i = 0; i < count && outIdx < expectedSize; i++) output[outIdx++] = val;
-            }
+        const mw = member.width || 0;
+        const mh = member.height || 0;
+        if (mw > 0 && mh > 0 && (!dimSets[0] || dimSets[0].w !== mw || dimSets[0].h !== mh)) {
+            dimSets.push({ w: mw, h: mh, source: 'Metadata' });
         }
-        return output.slice(0, outIdx);
-    }
 
-    async save(bitmapBuf, castRect, outputPath, member, endianness, alphaBuf = null, customPalette = null) {
-        let shouldRotate = false;
-        try {
-            // 1. Parse or calculate header metadata
-            const header = this._parseHeader(bitmapBuf, endianness, member, castRect);
-            if (!header) return null;
+        // 2. Decompression methods
+        const zlibBuf = this._tryZlib(bitmapBuf);
+        const methods = [
+            { name: 'Raw', data: bitmapBuf },
+            { name: 'PackBits', data: this.decodePackBits(bitmapBuf) },
+            { name: 'Zlib', data: zlibBuf }
+        ];
+        if (zlibBuf && zlibBuf.length > 0) {
+            methods.push({ name: 'Zlib+PackBits', data: this.decodePackBits(zlibBuf) });
+        }
 
-            if (bitmapBuf.length <= header.startData) {
-                this.log('WARNING', `Bitmap ${member.name} (${member.id}) has header but zero pixel data. Skipping.`);
-                return null;
-            }
+        const declaredDepth = member.bitDepth || 8;
+        const depths = [32, 16, 8, 4, 1, 2];
+        const orderedDepths = [declaredDepth, ...depths.filter(d => d !== declaredDepth)];
+        const alignments = [1, 2, 4, 8, 16, 32, 64, 128];
 
-            // 2. Extract and decompress pixel data
-            const pixelData = this._getPixelData(bitmapBuf, header, member);
-            if (!pixelData) return null;
+        this.log('DEBUG', `[BitmapExtractor] ${member.name}: Starting robust trials. Compression=${member._compression}, DeclaredDepth=${declaredDepth}`);
 
-            // 3. Select appropriate palette
-            const palette = customPalette || this.internalPalette ||
-                (header.depth === BitDepth.Depth1 ? [[255, 255, 255], [0, 0, 0]] : this.palettes.getGrayscale());
+        // 3. Robust Trial Loop
+        // We prioritize the DECLARED depth as the outermost loop.
+        // This prevents false matches at 4-bit when 8-bit PackBits decoded is the real intended result.
+        for (const d of orderedDepths) {
+            for (const method of methods) {
+                if (!method.data || method.data.length === 0) continue;
+                const actualLen = method.data.length;
 
-            // 4. Normalize pixel data to ARGB/Chunky format
-            const chunkyData = this._processChunkyData(pixelData, header, member, palette, alphaBuf);
-            if (!chunkyData) return null;
-
-            // 5. Generate and save PNG
-            const outputWidth = shouldRotate ? header.height : header.width;
-            const outputHeight = shouldRotate ? header.width : header.height;
-            const dst = new PNG({ width: outputWidth, height: outputHeight, colorType: 6, inputHasAlpha: true });
-
-            for (let y = 0; y < header.height; y++) {
-                for (let x = 0; x < header.width; x++) {
-                    const srcIdx = (y * header.width + x) * 4;
-                    let dstX = x, dstY = y;
-                    if (shouldRotate) { dstX = header.height - 1 - y; dstY = x; }
-                    const dstIdx = (dstY * outputWidth + dstX) * 4;
-
-                    if (srcIdx + 3 < chunkyData.length && dstIdx + 3 < dst.data.length) {
-                        dst.data[dstIdx] = chunkyData[srcIdx];
-                        dst.data[dstIdx + 1] = chunkyData[srcIdx + 1];
-                        dst.data[dstIdx + 2] = chunkyData[srcIdx + 2];
-                        dst.data[dstIdx + 3] = (alphaBuf && alphaBuf.length > 0) ? alphaBuf[y * header.width + x] : chunkyData[srcIdx + 3];
+                for (const dims of dimSets) {
+                    const baseRowBytes = Math.ceil(dims.w * d / 8);
+                    for (const align of alignments) {
+                        const rb = Math.ceil(baseRowBytes / align) * align;
+                        if (rb * dims.h === actualLen) {
+                            this.log('SUCCESS', `[${method.name}] Match for ${member.name}: ${dims.w}x${dims.h}@${d} [${dims.source}], rowBytes=${rb}`);
+                            return this._doExtract(method.data, dims.w, dims.h, d, rb, member, customPalette, alphaBuf, outputPath);
+                        }
                     }
                 }
             }
-
-            const imgData = PNG.sync.write(dst);
-            const result = this.saveFile(imgData, outputPath, "bitmap");
-            if (result) return { width: outputWidth, height: outputHeight, path: result.file, format: "png" };
-
-            return null;
-        } catch (e) {
-            this.log('ERROR', `Failed to save bitmap ${member.name}: ${e.stack}`);
-            return null;
-        }
-    }
-
-    /**
-     * Extracts structural metadata from the BITD chunk header or member properties.
-     */
-    _parseHeader(buffer, endianness, member, castRect) {
-        let hasHeader = false;
-        if (buffer.length >= HeaderSize.Bitd) {
-            const bds = new DataStream(buffer, endianness);
-            const rbRaw = (endianness === 'little') ? bds.buffer.readUInt16LE(0) : bds.buffer.readUInt16BE(0);
-            const top = (endianness === 'little') ? bds.buffer.readInt16LE(2) : bds.buffer.readInt16BE(2);
-            const left = (endianness === 'little') ? bds.buffer.readInt16LE(4) : bds.buffer.readInt16BE(4);
-            const bottom = (endianness === 'little') ? bds.buffer.readInt16LE(6) : bds.buffer.readInt16BE(6);
-            const right = (endianness === 'little') ? bds.buffer.readInt16LE(8) : bds.buffer.readInt16BE(8);
-            const rb = rbRaw & BitMask.RowBytes;
-            const w = Math.abs(right - left), h = Math.abs(bottom - top);
-            const castWidth = member.width || Math.abs(castRect.right - castRect.left);
-            const castHeight = member.height || Math.abs(castRect.bottom - castRect.top);
-
-            if (w === castWidth && h === castHeight && rb >= w && rb < w + Limits.RowBytesPaddingThreshold) hasHeader = true;
-            else if (w > 0 && w < Limits.MaxImageDimension && h > 0 && h < Limits.MaxImageDimension && rb >= w && rb < w + Limits.ExtendedRowBytesPaddingThreshold) hasHeader = true;
         }
 
-        const rawDepth = member.bitDepth || BitDepth.Depth8;
-        // If MemberSpec already parsed flags, usage is cleaner. Otherwise fallback.
-        let nominalDepth = (rawDepth & 0xFF);
-        if (member.depthFlags !== undefined) nominalDepth = member.bitDepth; // MemberSpec already masked it
-        else nominalDepth = (rawDepth & 0xFF);
+        // 4. Special Case: Row-Based PackBits (Habbo legacy)
+        // We also prioritize the declared depth here
+        for (const d of orderedDepths) {
+            for (const dims of dimSets) {
+                const baseRowBytes = Math.ceil(dims.w * d / 8);
+                for (const align of alignments) {
+                    const rb = Math.ceil(baseRowBytes / align) * align;
+                    // Try Row-Based PackBits on raw and zlib decompressed
+                    const rowSources = [{ name: 'PackBitsRows', data: bitmapBuf }];
+                    if (zlibBuf) rowSources.push({ name: 'PackBitsRows(Zlib)', data: zlibBuf });
 
-        if (rawDepth === 8208) {
-            // TODO: UNCERTAINTY: 8208 (0x2010) implies 0x2000 flag + 16-bit depth (0x10).
-            // Legacy behavior forces this to 8-bit, possibly due to a specific packing format.
-            // Verified: ProjectorRays does not implement specific bitmap parsing to confirm this flag.
-            // Keeping legacy behavior as safe default.
-            nominalDepth = 8;
-        }
-
-        let width, height, rowBytes, startData;
-        if (hasHeader) {
-            const rbRaw = (endianness === 'little') ? buffer.readUInt16LE(0) : buffer.readUInt16BE(0);
-            const bTop = (endianness === 'little') ? buffer.readInt16LE(2) : buffer.readInt16BE(2);
-            const bLeft = (endianness === 'little') ? buffer.readInt16LE(4) : buffer.readInt16BE(4);
-            const bBottom = (endianness === 'little') ? buffer.readInt16LE(6) : buffer.readInt16BE(6);
-            const bRight = (endianness === 'little') ? buffer.readInt16BE(8) : buffer.readInt16BE(8);
-            rowBytes = rbRaw & BitMask.RowBytes;
-            width = Math.abs(bRight - bLeft);
-            height = Math.abs(bBottom - bTop);
-            startData = HeaderSize.Bitd;
-        } else {
-            width = member.width || Math.abs(castRect.right - castRect.left);
-            height = member.height || Math.abs(castRect.bottom - castRect.top);
-            rowBytes = (nominalDepth === BitDepth.Depth32) ? (width * Alpha.BytesPerPixel) : (width + (width % 2));
-            startData = 0;
-        }
-
-        return { width: width || 1, height: height || 1, rowBytes, depth: nominalDepth, startData, hasHeader, rawDepth };
-    }
-
-    /**
-     * Resolves and decompresses pixel data based on compression flags.
-     */
-    _getPixelData(buffer, header, member) {
-        let pixelData = buffer.slice(header.startData);
-        if (header.hasHeader) return pixelData;
-
-        const { width, height, depth } = header;
-        let calcRowBytes;
-        if (depth <= BitDepth.Depth8) {
-            const bitsPerRow = width * depth;
-            const bytesPerRow = Math.ceil(bitsPerRow / 8);
-            calcRowBytes = bytesPerRow + (bytesPerRow % 2);
-        } else if (header.depth === BitDepth.Depth16) calcRowBytes = width * 2;
-        else if (header.depth === BitDepth.Depth24) calcRowBytes = width * 3;
-        else if (header.depth === BitDepth.Depth32) calcRowBytes = width * 4;
-        else calcRowBytes = width + (width % 2);
-
-        const expectedSize = calcRowBytes * height;
-
-        // Path 1: Raw / Uncompressed
-        if (pixelData.length === expectedSize || Math.abs(pixelData.length - expectedSize) <= 2) {
-            header.rowBytes = calcRowBytes;
-            return pixelData;
-        }
-
-        // Path 2: PackBits
-        if ([1, 0xFFFE, 202, -101, 0xFF9B].some(c => member._compression === c || (member._compression & 0xFFFF) === c)) {
-            let pData = pixelData;
-            if (member._compression === 202 && pixelData.length > 4 && pixelData[0] === 0xC8) pData = pixelData.slice(4);
-            const decompressed = this.decompressPackBits(pData, expectedSize * 1.5 + 100);
-            if (decompressed.length === expectedSize || Math.abs(decompressed.length - expectedSize) <= 2) {
-                header.rowBytes = calcRowBytes;
-                return decompressed;
+                    for (const src of rowSources) {
+                        const rowResult = this.decompressPackBitsRows(src.data, rb, dims.h);
+                        if (rowResult && rowResult.actualLen > 0 && rowResult.data.length === rb * dims.h) {
+                            this.log('SUCCESS', `[${src.name}] Match for ${member.name}: ${dims.w}x${dims.h}@${d} [${dims.source}], rowBytes=${rb}`);
+                            return this._doExtract(rowResult.data, dims.w, dims.h, d, rb, member, customPalette, alphaBuf, outputPath);
+                        }
+                    }
+                }
             }
         }
 
-        // Path 3: Zlib / Deflate
-        if (member._compression === 315 || pixelData.length < expectedSize) {
-            let decompressed = null;
-            try {
-                let zData = pixelData;
-                if (member._compression === 315 && pixelData.length > 4 && pixelData[0] === 0xC8) zData = pixelData.slice(4);
-                decompressed = zlib.inflateSync(zData);
-            } catch (e) {
-                try { decompressed = this.decompressPackBits(pixelData, expectedSize * 2); } catch (e2) { }
-            }
-
-            if (decompressed && (decompressed.length === expectedSize || Math.abs(decompressed.length - expectedSize) <= 2)) {
-                header.rowBytes = calcRowBytes;
-                return decompressed;
-            }
-        }
-
-        // Path 4: Unpadded fallback
-        if (depth <= 8) {
-            const unpaddedRowBytes = Math.ceil((width * depth) / 8);
-            const unpaddedSize = unpaddedRowBytes * height;
-            if (pixelData.length === unpaddedSize) {
-                header.rowBytes = unpaddedRowBytes;
-                return pixelData;
-            }
-        }
-
-        this.log('ERROR', `Data size mismatch (Got: ${pixelData.length}) for ${width}x${height}@${depth}`);
+        this.log('ERROR', `No matching configuration found for ${member.name}. Tried all prioritized decompression/geometry combinations.`);
         return null;
     }
 
-    /**
-     * Converts raw pixels into 32-bit chunky ARGB data.
-     */
-    _processChunkyData(pixelData, header, member, palette, alphaBuf) {
-        let chunkyData;
-        let { width, height, rowBytes, depth, rawDepth } = header;
-        // 0x4000 often means Alpha Channel Used in Shoreline/Director 8+.
-        // Old logic: const forceOpaque = (rawDepth & 0x4000) !== 0; -> This was likely WRONG for this era.
-        // New logic: Only force opaque if we are sure.
-        let hasAlphaFlag = (rawDepth & 0x4000) !== 0;
-        if (member.depthFlags !== undefined) hasAlphaFlag = (member.depthFlags & 0x4000) !== 0;
 
-        // If it's 32-bit, it has alpha. 
-        // If 0x4000 is set on 8/16/24 bit, it might mean "Alpha channel attached" or "Key transparency".
-        const forceOpaque = false;
-        // ProjectorRays does not clarify if 0x4000 strictly enforces opacity.
-        // Current heuristic: assume false and rely on alpha channel detection.
-        const numPlanes = (depth === 32) ? 4 : ((depth === 24) ? 3 : ((depth === 16) ? 2 : 0));
-        const isProbablyPlanar = (numPlanes >= 3) || (numPlanes === 2 && rowBytes === width);
+    async _doExtract(data, width, height, depth, rowBytes, member, customPalette, alphaBuf, outputPath) {
+        if (!data || data.length === 0) return null;
 
-        if (numPlanes > 1 && isProbablyPlanar) {
-            const planRes = this._reconstructPlanar(pixelData, width, height, rowBytes, depth, numPlanes, palette);
-            if (planRes) {
-                chunkyData = planRes.pixelData;
-                if (!forceOpaque && numPlanes === 4) {
-                    let hasActionableAlpha = false, firstAlpha = chunkyData[3];
-                    for (let i = 3; i < chunkyData.length; i += 4) if (chunkyData[i] !== firstAlpha) { hasActionableAlpha = true; break; }
-                    if (!hasActionableAlpha) for (let i = 3; i < chunkyData.length; i += 4) chunkyData[i] = 255;
+        const { Palette } = require('../utils/Palette');
+        const palette = customPalette || this.internalPalette || await Palette.resolveMemberPalette(member, this.extractor) ||
+            (depth === 1 ? [[255, 255, 255], [0, 0, 0]] : null);
+
+        let orders = ['DEFAULT'];
+        if (depth === 32) {
+            // ROW_PLANAR_ARGB has been verified as correct for Habbo 32-bit assets
+            orders = ['ROW_PLANAR_ARGB'];
+        }
+
+        for (const order of orders) {
+            try {
+                const chunkyData = this._processChunkyData(data, width, height, depth, rowBytes, palette, alphaBuf, order);
+                const dst = new PNG({ width, height, colorType: 6, inputHasAlpha: true });
+                dst.data = chunkyData;
+                const imgData = PNG.sync.write(dst);
+
+                if (outputPath) {
+                    return await this.saveFile(imgData, outputPath, "bitmap");
                 }
-                return chunkyData;
+                return imgData;
+            } catch (e) {
+                this.log('ERROR', `Extraction failed for ${member.name} (${order}): ${e.message}`);
             }
         }
+        return null;
+    }
 
-        if (depth === 16) {
-            chunkyData = Buffer.alloc(width * height * 4);
-            const endianness = member.endianness || 'big';
-            for (let i = 0; i < width * height; i++) {
-                const srcOff = i * 2;
-                if (srcOff + 1 >= pixelData.length) break;
-                const val = endianness === 'big' ? pixelData.readUInt16BE(srcOff) : pixelData.readUInt16LE(srcOff);
-                const r = ((val >> 10) & 0x1F) << 3;
-                const g = ((val >> 5) & 0x1F) << 3;
-                const b = (val & 0x1F) << 3;
-                // ProjectorRays lacks implementation for 16-bit bitmap rendering.
-                // Assuming 1555 format (top bit = alpha) when 0x4000 flag is present based on common legacy behavior.
-                let a = (rawDepth & 0x4000) ? ((val & 0x8000) ? 255 : 0) : 255;
-                [chunkyData[i * 4], chunkyData[i * 4 + 1], chunkyData[i * 4 + 2], chunkyData[i * 4 + 3]] = [r, g, b, a];
+    _tryZlib(buf) {
+        try {
+            return zlib.inflateSync(buf);
+        } catch (e) {
+            for (let i = 0; i < Math.min(buf.length, 128); i++) {
+                if (buf[i] === 0x78 && (buf[i + 1] === 0x01 || buf[i + 1] === 0x9C || buf[i + 1] === 0xDA)) {
+                    try {
+                        return zlib.inflateSync(buf.slice(i));
+                    } catch (inner) { }
+                }
             }
-        } else {
-            // TODO: UNCERTAINTY: transparency logic: 
-            // 2. If it's a "transparent canvas" (corners are index 0), enable transparency.
-            // 3. For 8-bit or less, we often want index 0 to be transparent unless it's a matte or opaque member.
-            // If hasAlphaFlag is set, we definitely want transparency check.
-            const isTransparentCanvas = depth <= 8 && this._checkIsTransparentCanvas(pixelData, width, height, rowBytes, depth);
-            // Heuristic transparency check. Validated against common samples but may need adjustment for specific edge cases.
-            // ProjectorRays does not offer an alternative algorithm for this.
-            const noTransparencyOverride = forceOpaque || (depth > 8 && !isTransparentCanvas && !hasAlphaFlag);
+        }
+        return null;
+    }
 
-            chunkyData = this._normalizeToARGB(pixelData, width, height, rowBytes, depth, palette, noTransparencyOverride);
+    _processChunkyData(pixelData, width, height, depth, rowBytes, palette, alphaBuf, channelOrder = 'ARGB') {
+        const dst = Buffer.alloc(width * height * 4);
+
+        if (!palette && depth <= 8) {
+            palette = [];
+            for (let i = 0; i < 256; i++) palette.push([i, i, i]);
         }
 
-        if (forceOpaque && depth > 8) {
-            for (let i = 3; i < chunkyData.length; i += 4) chunkyData[i] = 255;
+        if (depth === 32 && channelOrder.startsWith('ROW_PLANAR_')) {
+            const layout = channelOrder.replace('ROW_PLANAR_', '');
+            for (let y = 0; y < height; y++) {
+                const rowBase = y * rowBytes;
+                const planeWidth = Math.floor(rowBytes / 4);
+                for (let x = 0; x < width; x++) {
+                    const dstIdx = (y * width + x) * 4;
+                    for (let c = 0; c < 4; c++) {
+                        const char = layout[c];
+                        const val = pixelData[rowBase + (planeWidth * c) + x] || 0;
+                        if (char === 'R') dst[dstIdx] = val;
+                        else if (char === 'G') dst[dstIdx + 1] = val;
+                        else if (char === 'B') dst[dstIdx + 2] = val;
+                        else if (char === 'A') dst[dstIdx + 3] = val;
+                    }
+                }
+            }
+            return dst;
         }
 
-        return chunkyData;
+        if (depth === 32 && channelOrder.startsWith('PLANAR_')) {
+            const layout = channelOrder.replace('PLANAR_', '');
+            const planeSize = width * height;
+            for (let i = 0; i < planeSize; i++) {
+                const dstIdx = i * 4;
+                for (let c = 0; c < 4; c++) {
+                    const char = layout[c];
+                    const val = pixelData[planeSize * c + i] || 0;
+                    if (char === 'R') dst[dstIdx] = val;
+                    else if (char === 'G') dst[dstIdx + 1] = val;
+                    else if (char === 'B') dst[dstIdx + 2] = val;
+                    else if (char === 'A') dst[dstIdx + 3] = val;
+                }
+            }
+            return dst;
+        }
+
+        for (let y = 0; y < height; y++) {
+            const rowStart = y * rowBytes;
+            if (rowStart >= pixelData.length) break;
+            for (let x = 0; x < width; x++) {
+                let r = 0, g = 0, b = 0, a = 255;
+                if (depth === 8) {
+                    const colorIdx = pixelData[rowStart + x];
+                    const color = (palette && palette[colorIdx]) || [0, 0, 0];
+                    [r, g, b] = color;
+                } else if (depth === 4) {
+                    const byte = pixelData[rowStart + Math.floor(x / 2)];
+                    const shift = (x % 2 === 0) ? 4 : 0;
+                    const colorIdx = (byte >> shift) & 0x0F;
+                    const color = (palette && palette[colorIdx]) || [0, 0, 0];
+                    [r, g, b] = color;
+                } else if (depth === 2) {
+                    const byte = pixelData[rowStart + Math.floor(x / 4)];
+                    const shift = (3 - (x % 4)) * 2;
+                    const colorIdx = (byte >> shift) & 0x03;
+                    const color = (palette && palette[colorIdx]) || [0, 0, 0];
+                    [r, g, b] = color;
+                } else if (depth === 1) {
+                    const byte = pixelData[rowStart + Math.floor(x / 8)];
+                    const bit = (byte >> (7 - (x % 8))) & 1;
+                    const color = bit ? (palette[1] || [0, 0, 0]) : (palette[0] || [255, 255, 255]);
+                    [r, g, b] = color;
+                } else if (depth === 32) {
+                    const idx = rowStart + x * 4;
+                    if (idx + 3 < pixelData.length) {
+                        const b1 = pixelData[idx], b2 = pixelData[idx + 1], b3 = pixelData[idx + 2], b4 = pixelData[idx + 3];
+                        if (channelOrder === 'ARGB') { a = b1; r = b2; g = b3; b = b4; }
+                        else if (channelOrder === 'RGBA') { r = b1; g = b2; b = b3; a = b4; }
+                        else if (channelOrder === 'BGRA') { b = b1; g = b2; r = b3; a = b4; }
+                    }
+                } else if (depth === 16) {
+                    const idx = rowStart + x * 2;
+                    if (idx + 1 < pixelData.length) {
+                        const val = pixelData.readUint16BE(idx);
+                        r = ((val >> 10) & 0x1F) << 3; g = ((val >> 5) & 0x1F) << 3; b = (val & 0x1F) << 3;
+                    }
+                }
+                if (alphaBuf && alphaBuf.length === width * height) a = alphaBuf[y * width + x];
+                const dstIdx = (y * width + x) * 4;
+                dst[dstIdx] = r; dst[dstIdx + 1] = g; dst[dstIdx + 2] = b; dst[dstIdx + 3] = a;
+            }
+        }
+        return dst;
+    }
+
+    decompressPackBitsRows(data, rowBytes, height) {
+        let inPos = 0;
+        const out = Buffer.alloc(rowBytes * height);
+        let outPos = 0;
+        let actualLen = 0;
+        try {
+            for (let y = 0; y < height; y++) {
+                if (inPos >= data.length) break;
+                let rowDataLen = 0;
+                if (data[inPos] > 120 && data[inPos] < 255) {
+                    rowDataLen = data[inPos++];
+                } else {
+                    if (inPos + 2 > data.length) break;
+                    rowDataLen = data.readUInt16BE(inPos);
+                    inPos += 2;
+                }
+                if (inPos + rowDataLen > data.length) break;
+                const rowEnd = inPos + rowDataLen;
+                const rowStart = outPos;
+                while (inPos < rowEnd && (outPos - rowStart) < rowBytes) {
+                    const n = data.readInt8(inPos++);
+                    if (n >= 0) {
+                        const count = n + 1;
+                        for (let i = 0; i < count && inPos < rowEnd && (outPos - rowStart) < rowBytes; i++) {
+                            out[outPos++] = data[inPos++];
+                            actualLen++;
+                        }
+                    } else if (n !== -128) {
+                        const count = -n + 1;
+                        if (inPos < rowEnd) {
+                            const val = data[inPos++];
+                            for (let i = 0; i < count && (outPos - rowStart) < rowBytes; i++) {
+                                out[outPos++] = val;
+                                actualLen++;
+                            }
+                        }
+                    }
+                }
+                inPos = rowEnd;
+                outPos = rowStart + rowBytes;
+            }
+            return { data: out, actualLen: actualLen };
+        } catch (e) { return { data: out, actualLen: actualLen }; }
+    }
+
+    decodePackBits(data) {
+        const out = [];
+        let inPos = 0;
+        try {
+            while (inPos < data.length) {
+                const n = data.readInt8(inPos++);
+                if (n >= 0) {
+                    const count = n + 1;
+                    for (let i = 0; i < count && inPos < data.length; i++) out.push(data[inPos++]);
+                } else if (n !== -128) {
+                    const count = -n + 1;
+                    if (inPos < data.length) {
+                        const val = data[inPos++];
+                        for (let i = 0; i < count; i++) out.push(val);
+                    }
+                }
+            }
+        } catch (e) { }
+        return Buffer.from(out);
     }
 }
 

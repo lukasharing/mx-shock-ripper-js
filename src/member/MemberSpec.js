@@ -1,53 +1,65 @@
 /**
- * @version 1.3.0
+ * @version 1.3.5
  * MemberSpec.js - Type-specific binary metadata parsers
- * 
- * Each class provides a static 'parse' method for a specific Cast Member type payload.
- * These structures align with the legacy Director 4.x - MX 2004 specifications.
  */
 
 class BitmapSpec {
     /**
-     * Payload: [Flags2][InitialRect][RegPointLegacy][RegPoint][PaletteRef][Flags2][Depth][AlphaRef][CompType]
+     * Payload: [Flags1(4)][InitialRect(8)][RegPointLegacy(4)][RegPoint(4)][PaletteId(2)][Flags2(2)][Depth(2)][AlphaRef(2)]
      */
     static parse(ds, len) {
-        if (len < 16) return {};
-        const flags1 = ds.readUint16();
-        const initialRect = ds.readRect();
-        const regLegacy = ds.readPoint();
-        const regPoint = ds.readPoint();
+        if (len < 10) return {};
+        const startPos = ds.position;
 
-        const height = initialRect.bottom - initialRect.top;
-        const width = initialRect.right - initialRect.left;
+        const pitchRaw = ds.readUint16(); // Offset 0
+        const isColor = (pitchRaw & 0x8000) !== 0;
+        const pitch = pitchRaw & 0x3FFF;
 
-        let paletteId = 0, bitDepth = 8, flags2 = 0, alphaCastId = -1, compression = 0;
-        let depthFlags = 0;
-        if (len >= 24) {
-            paletteId = ds.readInt16();
-            flags2 = ds.readUint16(); // Offset 20: Often flags in Shockwave/Shoreline
-            const rawDepth = ds.readInt16(); // Offset 22: Bit depth + flags
-            bitDepth = rawDepth & 0x00FF; // Actual logical depth
-            depthFlags = rawDepth & 0xFF00; // High-byte flags (e.g. 0x4000)
-        }
-        if (len >= 28) {
-            alphaCastId = ds.readInt16();
-            compression = ds.readInt16();
+        const initialRect = ds.readRect(); // Offset 2
+
+        // Safe seek and read (standard length is 24-28 bytes)
+        let regY = 0, regX = 0, updateFlags = 0, bitDepth = 8;
+        if (len >= 22) {
+            ds.seek(startPos + 18);
+            regY = ds.readInt16(); // Offset 18
+            regX = ds.readInt16(); // Offset 20
+            if (len >= 24) {
+                updateFlags = ds.readUint8(); // Offset 22
+                bitDepth = ds.readUint8();    // Offset 23
+            }
         }
 
-        return {
-            height,
-            width,
-            regPoint,
-            paletteId,
-            bitDepth,
-            depthFlags,
-            flags2,
-            _castFlags: flags1,
+        let clutCastLib = -1;
+        let clutId = 0;
+
+        if (len >= 28 && (isColor || ds.position + 4 <= startPos + len)) {
+            clutCastLib = ds.readInt16(); // Offset 24
+            clutId = ds.readInt16();      // Offset 26
+
+            // Normalize built-in palette IDs (-1 offset)
+            if (clutId <= 0) {
+                clutId -= 1;
+            }
+        }
+
+        const height = Math.abs(initialRect.bottom - initialRect.top);
+        const width = Math.abs(initialRect.right - initialRect.left);
+
+        const res = {
+            height: height || 1,
+            width: width || 1,
+            regPoint: { x: regX, y: regY },
+            paletteId: clutId,      // Map clutId to paletteId for compatibility
+            clutCastLib,
+            bitDepth: bitDepth || 8,
+            _pitch: pitch,
+            _isColor: isColor,
+            _updateFlags: updateFlags,
             _initialRect: initialRect,
-            _regLegacy: regLegacy,
-            _alphaCastId: alphaCastId,
-            _compression: compression
+            _castFlags: pitchRaw,   // Store raw pitch as castFlags for legacy checks
+            secondaryPaletteId: clutId // Keep secondaryPaletteId for now
         };
+        return res;
     }
 }
 

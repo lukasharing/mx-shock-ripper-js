@@ -1,5 +1,5 @@
 /**
- * @version 1.3.0
+ * @version 1.3.5
  * TextExtractor.js - Extraction logic for Director Text and Field members
  * 
  * Handles STXT and TEXT chunks. Exports as RTF to preserve potential formatting 
@@ -16,24 +16,21 @@ class TextExtractor extends GenericExtractor {
     }
 
     /**
-     * Extracts text and wraps it in a basic RTF container.
+     * Extracts text, optionally wrapping it in an RTF container.
      */
-    extract(buffer) {
+    extract(buffer, options = {}) {
         if (!buffer || buffer.length === 0) return "";
 
         let content = "";
-        let stylesBuffer = null;
 
         // Detect modern 12-byte STXT header: [4:HdrSize][4:TxtSize][4:StyleSize]
         if (buffer.length >= HeaderSize.Stxt) {
             const ds = new DataStream(buffer, 'big');
             const headerSize = ds.readUint32();
             const textSize = ds.readUint32();
-            // const styleSize = ds.readUint32();
 
             if (headerSize >= HeaderSize.Stxt && headerSize + textSize <= buffer.length) {
                 content = buffer.slice(headerSize, headerSize + textSize).toString('utf8');
-                // stylesBuffer = buffer.slice(headerSize + textSize, headerSize + textSize + styleSize);
             } else {
                 content = buffer.toString('utf8');
             }
@@ -41,14 +38,16 @@ class TextExtractor extends GenericExtractor {
             content = buffer.toString('utf8');
         }
 
-        return this.formatRTF(content);
+        const cleanContent = content.replace(/\0/g, '').trim();
+        if (options.useRaw) return cleanContent;
+
+        return this.formatRTF(cleanContent);
     }
 
     /**
      * Formats raw text into a simple RTF document.
      */
-    formatRTF(rawText) {
-        const cleanText = rawText.replace(/\0/g, '').trim(); // Remove nulls
+    formatRTF(cleanText) {
         // Escape RTF special characters
         const escaped = cleanText
             .replace(/\\/g, '\\\\')
@@ -61,17 +60,22 @@ class TextExtractor extends GenericExtractor {
     }
 
     /**
-     * Saves the extracted text as an RTF file.
+     * Saves the extracted text.
      */
-    save(buffer, outputPath, member) {
-        const rtfContent = this.extract(buffer);
-        const finalPath = outputPath.endsWith('.rtf') ? outputPath : outputPath + '.rtf';
-        const result = this.saveFile(Buffer.from(rtfContent, 'utf8'), finalPath, "Text (RTF)");
+    save(buffer, outputPath, member, options = {}) {
+        const rtfContent = this.extract(buffer, options);
+        // Use the provided outputPath extension if it's already there (e.g. .props)
+        const finalPath = (outputPath.includes('.') && !outputPath.endsWith('.rtf')) ? outputPath :
+            (outputPath.endsWith('.rtf') ? outputPath : outputPath + '.rtf');
+
+        const formatLabel = options.useRaw ? "Text (Raw)" : "Text (RTF)";
+        const result = this.saveFile(Buffer.from(rtfContent, 'utf8'), finalPath, formatLabel);
+
         if (result) {
             return {
                 file: result.file,
                 size: result.size,
-                format: 'rtf'
+                format: options.useRaw ? (outputPath.split('.').pop() || 'txt') : 'rtf'
             };
         }
         return false;

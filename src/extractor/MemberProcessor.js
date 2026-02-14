@@ -5,7 +5,7 @@ const { Palette } = require('../utils/Palette');
 const { Color } = require('../utils/Color');
 
 /**
- * @version 1.3.4
+ * @version 1.3.5
  * MemberProcessor.js - Centralized orchestration for member-specific extraction logic.
  * Handles chunk-to-member mapping and delegates to specialized extractors.
  */
@@ -23,13 +23,20 @@ class MemberProcessor {
         const map = this.extractor.metadataManager.keyTable[member.id];
 
         try {
-            // Priority 1: Primary Data Chunk (pixels, text, sound, etc.)
-            // We search the key table map for standard content tags.
-            const primaryTag = [Magic.BITD, Magic.STXT, Magic.TEXT, Magic.SND, Magic.FONT, Magic.VWFT, Magic.CLUT, Magic.CVWS, Magic.XTRA, Magic.SCORE, Magic.VWSC]
-                .find(t => map && map[t]);
+            if (member.typeId === MemberType.Bitmap) {
+                console.log(`[DEBUG_BITD] Member ${member.name} (ID: ${member.id}) map:`, map);
+            }
+
+            const primaryTag = [
+                Magic.BITD, Magic.DIB, Magic.PIXL, 'Pixl', 'bitd', 'Abmp', 'PMBA',
+                Magic.STXT, Magic.TEXT, Magic.SND, Magic.FONT, Magic.VWFT,
+                Magic.CLUT, Magic.CVWS, Magic.XTRA, Magic.SCORE, Magic.VWSC
+            ].find(t => map && map[t]);
 
             if (primaryTag && map[primaryTag]) {
-                member.data = await this.extractor.dirFile.getChunkData(this.extractor.dirFile.getChunkById(map[primaryTag]));
+                const chunkId = map[primaryTag];
+                const dataChunk = this.extractor.dirFile.getChunkById(chunkId);
+                member.data = await this.extractor.dirFile.getChunkData(dataChunk);
             } else {
                 // Fallback: If no explicit primary tag is found in the map, use the chunk passed from the CAST loop.
                 member.data = await this.extractor.dirFile.getChunkData(chunk);
@@ -41,7 +48,7 @@ class MemberProcessor {
             }
 
             // Final delegation to extractor logic
-            await this.processMember(member);
+            await this.processMember(member, map);
 
         } catch (e) {
             this.log('ERROR', `Failed to process member content for ${member.id} (${member.name}): ${e.message}`);
@@ -51,7 +58,7 @@ class MemberProcessor {
     /**
      * Specialized processing for a member once its data chunks are resolved.
      */
-    async processMember(member) {
+    async processMember(member, map) {
         try {
             if (!member || !member.id) return;
 
@@ -63,52 +70,46 @@ class MemberProcessor {
 
             // 2. Resolve Palette for Bitmaps & Shapes
             let finalPalette = null;
+            // 2. Resolve Palette for Bitmaps & Shapes
             if (member.typeId === MemberType.Bitmap || member.typeId === MemberType.Shape) {
-                finalPalette = Palette.resolveMemberPalette(member, this.extractor);
+                finalPalette = await Palette.resolveMemberPalette(member, this.extractor);
             }
 
             // 3. Delegate to specialized extractors based on MemberType
             let result = null;
 
-            switch (member.typeId) {
-                case MemberType.Bitmap:
-                    result = await this.extractor.bitmapExtractor.extract(member.data, outPathPrefix, member, finalPalette, member.alphaData);
-                    break;
-                case MemberType.Palette:
-                    // Palettes are typically handled early via processPalette, but we provide fallback here.
-                    if (member.data) {
-                        member.palette = Palette.parseDirector(member.data);
-                        result = await this.extractor.paletteExtractor.save(member.palette, outPathPrefix + ".pal", member);
-                    }
-                    break;
-                case MemberType.Script:
-                    result = await this.extractor.scriptHandler.processScript(member, outPathPrefix);
-                    break;
-                case MemberType.Sound:
-                    result = await this.extractor.soundExtractor.save(member.data, outPathPrefix, member);
-                    break;
-                case MemberType.Text:
-                case MemberType.Field:
-                    result = await this.extractor.textExtractor.save(member.data, outPathPrefix, member);
-                    break;
-                case MemberType.Shape:
-                    result = await this.extractor.shapeExtractor.save(outPathPrefix, member, finalPalette);
-                    break;
-                case MemberType.Font:
-                    result = await this.extractor.fontExtractor.save(member.data, outPathPrefix);
-                    break;
-                case MemberType.VectorShape:
-                    result = await this.extractor.vectorShapeExtractor.save(member.data, outPathPrefix, member);
-                    break;
-                case MemberType.FilmLoop:
-                    result = await this.extractor.movieExtractor.save(member.data, outPathPrefix, member);
-                    break;
-                default:
-                    // Dump unknown or unsupported types as raw binary if they have data.
-                    if (member.data && member.data.length > 0) {
-                        result = await this.extractor.genericExtractor.save(member.data, outPathPrefix + ".dat");
-                    }
-                    break;
+            this.log('DEBUG', `[MemberProcessor] Processing ${member.name} (ID: ${member.id}, typeId: ${member.typeId})`);
+
+            const typeId = member.typeId;
+            if (typeId === MemberType.Bitmap) {
+                result = await this.extractor.bitmapExtractor.extract(member.data, outPathPrefix + ".png", member, finalPalette, member.alphaData);
+            } else if (typeId === MemberType.Palette) {
+                if (member.data) {
+                    member.palette = Palette.parseDirector(member.data);
+                    result = await this.extractor.paletteExtractor.save(member.palette, outPathPrefix + ".pal", member);
+                }
+            } else if (typeId === MemberType.Script) {
+                result = await this.extractor.scriptHandler.handleScripts(member, map);
+            } else if (typeId === MemberType.Sound) {
+                result = await this.extractor.soundExtractor.save(member.data, outPathPrefix + ".wav", member);
+            } else if (typeId === MemberType.Text || typeId === MemberType.Field) {
+                const name = member.name || '';
+                const hasExt = name.match(/\.(props|txt|json|xml|html|css|js|ls|lsc)$/i);
+                const useRaw = !!hasExt;
+                const ext = hasExt ? '' : '.rtf';
+                result = await this.extractor.textExtractor.save(member.data, outPathPrefix + ext, member, { useRaw });
+            } else if (typeId === MemberType.Shape) {
+                result = await this.extractor.shapeExtractor.save(outPathPrefix + ".svg", member, finalPalette);
+            } else if (typeId === MemberType.Font) {
+                result = await this.extractor.fontExtractor.save(member.data, outPathPrefix + ".fnt");
+            } else if (typeId === MemberType.VectorShape) {
+                result = await this.extractor.vectorShapeExtractor.save(member.data, outPathPrefix + ".svg", member);
+            } else if (typeId === MemberType.FilmLoop) {
+                result = await this.extractor.movieExtractor.save(member.data, outPathPrefix + ".json", member);
+            } else {
+                if (member.data && member.data.length > 0) {
+                    result = await this.extractor.genericExtractor.save(member.data, outPathPrefix + ".dat");
+                }
             }
 
             // 4. Capture extraction results for metadata serialization
@@ -117,6 +118,7 @@ class MemberProcessor {
                 member.format = result.format;
                 if (result.width) member.width = result.width;
                 if (result.height) member.height = result.height;
+                if (result.length) member.scriptLength = result.length;
             }
 
         } catch (e) {
@@ -130,9 +132,14 @@ class MemberProcessor {
      */
     async processPalette(member, map) {
         try {
-            const id = map?.[Magic.CLUT] || map?.[Magic.CLUT.toLowerCase()] || member.id;
+            const id = map?.[Magic.CLUT] || map?.[Magic.CLUT.toLowerCase()] ||
+                map?.['Palt'] || map?.['palt'] ||
+                member.id;
             const chunk = this.extractor.dirFile.getChunkById(id);
-            if (!chunk) return;
+            if (!chunk) {
+                // this.log('WARN', `Palette chunk not found for member ${member.id} (Ref: ${id})`);
+                return;
+            }
 
             const data = await this.extractor.dirFile.getChunkData(chunk);
             if (data) {

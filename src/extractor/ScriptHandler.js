@@ -11,7 +11,7 @@ class ScriptHandler {
         if (!this.extractor.options.extractScript) return;
 
         // 1. Resolve and extract Text-based scripts (STXT/TEXT)
-        const { text, source: textSource } = await this._resolveScriptSource(member, memberKey);
+        const { text } = await this._resolveScriptSource(member, memberKey);
         if (text && text.trim() && member.typeId !== MemberType.Script) {
             const outPath = path.join(this.extractor.outputDir, `${member.name}`);
             const res = this.extractor.scriptExtractor.save(text, outPath, member);
@@ -20,9 +20,9 @@ class ScriptHandler {
                 if (!member.format || member.typeId === MemberType.Script) {
                     member.format = 'ls';
                 }
-                member.scriptLength = res.scriptLength;
+                return { format: 'ls', length: res.scriptLength };
             }
-            return;
+            return null;
         }
 
         // 2. Resolve and extract Compiled scripts (Lscr/Bytecode)
@@ -39,10 +39,12 @@ class ScriptHandler {
                     member.format = result.format;
                 }
                 member.scriptLength = result.length;
+                return result;
             }
         } else if (member.typeId === MemberType.Script) {
-            this.extractor.log('WARNING', `Member ID ${member.id} (Script): No script chunks found.`);
+            this.extractor.log('WARNING', `Member ID ${member.id} (${member.name}): No script chunks found.`);
         }
+        return null;
     }
 
     async _resolveScriptSource(member, memberKey) {
@@ -137,13 +139,21 @@ class ScriptHandler {
         const decompiled = this.extractor.lingoDecompiler.decompile(lscrData, names, member.scriptType, member.id, { lasm: this.extractor.options.lasm });
         const decompiledText = (typeof decompiled === 'object') ? decompiled.text || decompiled.source : decompiled;
 
-        // Always save raw bytecode (.lsc)
-        const lscPath = path.join(this.extractor.outputDir, `${member.name}.lsc`);
-        this.extractor.genericExtractor.save(lscrData, lscPath, member);
+        // Optional: save raw bytecode (.lsc)
+        if (this.extractor.options.saveLsc) {
+            const lscPath = path.join(this.extractor.outputDir, `${member.name}.lsc`);
+            this.extractor.genericExtractor.save(lscrData, lscPath, member);
+        }
 
         if (decompiledText) {
             const lsPath = path.join(this.extractor.outputDir, `${member.name}.ls`);
             this.extractor.scriptExtractor.save(decompiledText, lsPath, member);
+
+            // Save LASM if requested
+            if (this.extractor.options.lasm && typeof decompiled === 'object' && decompiled.lasm) {
+                const lasmPath = path.join(this.extractor.outputDir, `${member.name}.lasm`);
+                fs.writeFileSync(lasmPath, decompiled.lasm);
+            }
 
             if (decompiledText.includes(LingoConfig.Labels.ProtectedScript)) {
                 this.extractor.stats.protectedScripts = (this.extractor.stats.protectedScripts || 0) + 1;

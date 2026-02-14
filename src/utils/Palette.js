@@ -1,7 +1,6 @@
-/**
- * @version 1.3.4
- * Palette.js - Centralized Palette and Color management
- */
+const path = require('path');
+const { Magic } = require('../Constants');
+const DirectorFile = require('../DirectorFile');
 
 const PALETTES = {
     MAC: [
@@ -276,6 +275,40 @@ const PALETTES = {
         [255, 255, 255], [238, 238, 238], [221, 221, 221], [204, 204, 204], [187, 187, 187], [170, 170, 170], [153, 153, 153], [136, 136, 136],
         [119, 119, 119], [102, 102, 102], [85, 85, 85], [68, 68, 68], [51, 51, 51], [34, 34, 34], [17, 17, 17], [0, 0, 0]
     ],
+    VGA: [
+        [0, 0, 0], [0, 0, 160], [0, 160, 0], [0, 160, 160], [160, 0, 0], [160, 0, 160], [160, 80, 0], [160, 160, 160],
+        [80, 80, 80], [80, 80, 255], [80, 255, 80], [80, 255, 255], [255, 80, 80], [255, 80, 255], [255, 255, 80], [255, 255, 255],
+        [0, 0, 0], [20, 20, 20], [32, 32, 32], [44, 44, 44], [56, 56, 56], [68, 68, 68], [80, 80, 80], [96, 96, 96],
+        [112, 112, 112], [128, 128, 128], [144, 144, 144], [160, 160, 160], [180, 180, 180], [200, 200, 200], [224, 224, 224], [255, 255, 255],
+        [0, 0, 255], [64, 0, 255], [128, 0, 255], [192, 0, 255], [255, 0, 255], [255, 0, 192], [255, 0, 128], [255, 0, 64],
+        [255, 0, 0], [255, 64, 0], [255, 128, 0], [255, 192, 0], [255, 255, 0], [192, 255, 0], [128, 255, 0], [64, 255, 0],
+        [0, 255, 0], [0, 255, 64], [0, 255, 128], [0, 255, 192], [0, 255, 255], [0, 192, 255], [0, 128, 255], [0, 64, 255],
+        [128, 128, 255], [159, 128, 255], [192, 128, 255], [224, 128, 255], [255, 128, 255], [255, 128, 224], [255, 128, 192], [255, 128, 159],
+        [255, 128, 128], [255, 159, 128], [255, 192, 128], [255, 224, 128], [255, 255, 128], [224, 255, 128], [192, 255, 128], [159, 255, 128],
+        [128, 255, 128], [128, 255, 159], [128, 255, 192], [128, 255, 224], [128, 255, 255], [128, 224, 255], [128, 192, 255], [128, 159, 255],
+        [180, 180, 255], [198, 180, 255], [218, 180, 255], [236, 180, 255], [255, 180, 255], [255, 180, 236], [255, 180, 218], [255, 180, 198],
+        [255, 180, 180], [255, 198, 180], [255, 218, 180], [255, 236, 180], [255, 255, 180], [236, 255, 180], [218, 255, 180], [198, 255, 180],
+        [180, 255, 180], [180, 255, 198], [180, 255, 218], [180, 255, 236], [180, 255, 255], [180, 236, 255], [180, 218, 255], [180, 198, 255],
+        [0, 0, 112], [28, 0, 112], [56, 0, 112], [84, 0, 112], [112, 0, 112], [112, 0, 84], [112, 0, 56], [112, 0, 28],
+        [112, 0, 0], [112, 28, 0], [112, 56, 0], [112, 84, 0], [112, 112, 0], [84, 112, 0], [56, 112, 0], [28, 112, 0],
+        [0, 112, 0], [0, 112, 28], [0, 112, 56], [0, 112, 84], [0, 112, 112], [0, 84, 112], [0, 56, 112], [0, 28, 112],
+        [56, 56, 112], [68, 56, 112], [84, 56, 112], [96, 56, 112], [112, 56, 112], [112, 56, 96], [112, 56, 84], [112, 56, 68],
+        [112, 56, 56], [112, 68, 56], [112, 84, 56], [112, 96, 56], [112, 112, 56], [96, 112, 56], [84, 112, 56], [68, 112, 56],
+        [56, 112, 56], [56, 112, 68], [56, 112, 84], [56, 112, 96], [56, 112, 112], [56, 96, 112], [56, 84, 112], [56, 68, 112],
+        [80, 80, 112], [88, 80, 112], [96, 80, 112], [104, 80, 112], [112, 80, 112], [112, 80, 104], [112, 80, 96], [112, 80, 88],
+        [112, 80, 80], [112, 88, 80], [112, 96, 80], [112, 104, 80], [112, 112, 80], [104, 112, 80], [96, 112, 80], [88, 112, 80],
+        [80, 112, 80], [80, 112, 88], [80, 112, 96], [80, 112, 104], [80, 112, 112], [80, 104, 112], [80, 96, 112], [80, 88, 112],
+        [0, 0, 64], [16, 0, 64], [32, 0, 64], [48, 0, 64], [64, 0, 64], [64, 0, 48], [64, 0, 32], [64, 0, 16],
+        [64, 0, 0], [64, 16, 0], [64, 32, 0], [64, 48, 0], [64, 64, 0], [48, 64, 0], [32, 64, 0], [16, 64, 0],
+        [0, 64, 0], [0, 64, 16], [0, 64, 32], [0, 64, 48], [0, 64, 64], [0, 48, 64], [0, 32, 64], [0, 16, 64],
+        [32, 32, 64], [40, 32, 64], [48, 32, 64], [56, 32, 64], [64, 32, 64], [64, 32, 56], [64, 32, 48], [64, 32, 40],
+        [64, 32, 32], [64, 40, 32], [64, 48, 32], [64, 56, 32], [64, 64, 32], [56, 64, 32], [48, 64, 32], [40, 64, 32],
+        [32, 64, 32], [32, 64, 40], [32, 64, 48], [32, 64, 56], [32, 64, 64], [32, 56, 64], [32, 48, 64], [32, 40, 64],
+        [44, 44, 64], [48, 44, 64], [52, 44, 64], [60, 44, 64], [64, 44, 64], [64, 44, 60], [64, 44, 52], [64, 44, 48],
+        [64, 44, 44], [64, 48, 44], [64, 52, 44], [64, 60, 44], [64, 64, 44], [60, 64, 44], [52, 64, 44], [48, 64, 44],
+        [44, 64, 44], [44, 64, 48], [44, 64, 52], [44, 64, 60], [44, 64, 64], [44, 60, 64], [44, 52, 64], [44, 48, 64],
+        [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]
+    ],
     WIN_D5: [
         [255, 255, 255], [0, 255, 255], [255, 0, 255], [0, 0, 255], [255, 255, 0], [0, 255, 0], [255, 0, 0], [128, 128, 128],
         [160, 160, 164], [255, 251, 240], [51, 51, 51], [153, 102, 0], [51, 102, 51], [0, 51, 153], [204, 0, 255], [136, 0, 0],
@@ -394,6 +427,7 @@ class Palette {
      */
     static get SystemPalette() {
         return {
+            // Negative Resource IDs
             MAC_SYSTEM: -1,
             RAINBOW: -2,
             GRAYSCALE: -3,
@@ -404,7 +438,20 @@ class Palette {
             WEB_216: -8,
             VGA: -9,
             WINDOWS_SYSTEM: -101,
-            WINDOWS_SYSTEM_D5: -102
+            WINDOWS_SYSTEM_D5: -102,
+
+            // Positive Logical IDs (1-based CASt/ILS indices)
+            LOGICAL_MAC: 1,
+            LOGICAL_RAINBOW: 2,
+            LOGICAL_GRAYSCALE: 3,
+            LOGICAL_PASTELS: 4,
+            LOGICAL_VIVID: 5,
+            LOGICAL_NTSC: 6,
+            LOGICAL_METALLIC: 7,
+            LOGICAL_VGA: 8,
+            LOGICAL_WEB216: 9,
+            LOGICAL_WIN: 10,
+            LOGICAL_NTSC_30: 30
         };
     }
 
@@ -416,6 +463,26 @@ class Palette {
      */
     static getSystemPaletteById(id, platform = 'Macintosh') {
         const sys = this.SystemPalette;
+
+        // Handle positive logical IDs (1-based) as used in CASt chunk
+        if (id > 0) {
+            switch (id) {
+                case sys.LOGICAL_MAC: return PALETTES.MAC;
+                case sys.LOGICAL_RAINBOW: return PALETTES.RAINBOW;
+                case sys.LOGICAL_GRAYSCALE: return PALETTES.GRAYSCALE;
+                case sys.LOGICAL_PASTELS: return PALETTES.PASTELS;
+                case sys.LOGICAL_VIVID: return PALETTES.VIVID;
+                case sys.LOGICAL_NTSC: return PALETTES.NTSC;
+                case sys.LOGICAL_METALLIC: return PALETTES.METALLIC;
+                case sys.LOGICAL_VGA: return PALETTES.VGA;
+                case sys.LOGICAL_WEB216: return PALETTES.WEB_216;
+                case sys.LOGICAL_WIN: return PALETTES.WIN;
+                case sys.LOGICAL_NTSC_30: return PALETTES.NTSC;
+                default: return null;
+            }
+        }
+
+        // Handle negative resource IDs
         switch (id) {
             case sys.MAC_SYSTEM: return PALETTES.MAC;
             case sys.RAINBOW: return PALETTES.RAINBOW;
@@ -430,23 +497,158 @@ class Palette {
             case sys.WINDOWS_SYSTEM_D5: return PALETTES.WIN_D5;
             case 0: // Default Movie Palette / Current System
                 return (platform === 'Windows') ? PALETTES.WIN : PALETTES.MAC;
+            case -1: // Explicit Mac System
+                return PALETTES.MAC;
             default:
                 return null;
         }
     }
+
+    /**
+     * Fundamentals: Traces the palette reference chain across members (borrowing).
+     */
+    static async tracePaletteChain(member, extractor, platform, visited = new Set()) {
+        if (visited.has(member.id)) return null;
+        visited.add(member.id);
+        if (visited.size > 10) return null;
+
+        const hasModernBit = (member._castFlags & 0x20) !== 0;
+        let linkId = (hasModernBit && member.secondaryPaletteId) ? member.secondaryPaletteId : member.paletteId;
+
+        // 1. No Palette reference
+        if (linkId === 0 || linkId === -1 || !linkId) return null;
+
+        // 2. Negative IDs are explicit System Palettes
+        if (linkId < 0) {
+            const sysPal = this.getSystemPaletteById(linkId, platform);
+            if (sysPal) {
+                const sysName = this.getSystemPaletteName(linkId) || "System";
+                member.palette = { id: linkId, name: sysName, castlib: 'system', traced: true };
+                return sysPal;
+            }
+            return null;
+        }
+
+        // --- NEW: ILS/Logical Resolution ---
+        // For D4+, linkId is often an index into the Initial Load Segment (ILS)
+        const resolvedId = (extractor && extractor.metadataManager) ? extractor.metadataManager.resolvePaletteId(linkId) : null;
+        const searchId = resolvedId || linkId;
+
+        // 3. Local Member Check (Use resolved searchId)
+        if (extractor && extractor.members) {
+            const target = extractor.members.find(m => m.id === searchId);
+            if (target) {
+                if (target.typeId === 4 || target.type === 'Palette' || target.format === 'pal') {
+                    const data = target.palette?.data || target.palette || target.data;
+                    const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
+                    if (pal) {
+                        member.palette = { id: target.id, name: target.name, castlib: 'internal', traced: true, resolution: (resolvedId ? 'ils' : 'direct') };
+                        extractor.log('SUCCESS', `[Palette] Traced ${member.name} -> ${target.name} (${resolvedId ? 'ILS' : 'Direct'})`);
+                        return pal;
+                    }
+                } else if (target.typeId === 1 || target.type === 'Bitmap') {
+                    const borrowedPal = await this.tracePaletteChain(target, extractor, platform, visited);
+                    if (borrowedPal) {
+                        member.palette = Object.assign({}, target.palette, { traced: true, borrowedFrom: target.name });
+                        extractor.log('SUCCESS', `[Palette] Traced ${member.name} -> ${target.name} (Borrowed)`);
+                        return borrowedPal;
+                    }
+                }
+            }
+        }
+
+        // 4. Legacy Cast Slot Lookup (The "Tower Fix")
+        // If linkId is a positive integer (e.g. 8) and wasn't found as a direct Member ID,
+        // it likely refers to a Cast Slot Index (MCsL or Implicit Key Order).
+        if (linkId > 0 && extractor) {
+            let slotValue = undefined;
+
+            // Try explicit MCsL first
+            if (extractor.castOrder && extractor.castOrder[linkId] !== undefined) {
+                slotValue = extractor.castOrder[linkId];
+            }
+            // Fallback to implicit Key Table order
+            else if (extractor.metadataManager && extractor.metadataManager.castList && extractor.metadataManager.castList[linkId] !== undefined) {
+                slotValue = extractor.metadataManager.castList[linkId];
+            }
+
+            if (slotValue !== undefined) {
+                // The slot contains a value (e.g. 20). 
+                // We need to find the member that corresponds to this value (Internal ID or Cast ID).
+                // MetadataManager parses 'originalSlotId' from CASt chunks (Internal ID).
+                // Sometimes the slotValue IS the Member ID directly (if no aliasing).
+
+                if (extractor.members) {
+                    // Try linking via Internal ID (Aliasing)
+                    let target = extractor.members.find(m => m.originalSlotId === slotValue && (m.type === 'Palette' || m.typeId === 4));
+
+                    // If not found via internal ID, try direct ID match (if slotValue is a valid Member ID)
+                    if (!target) {
+                        target = extractor.members.find(m => m.id === slotValue && (m.type === 'Palette' || m.typeId === 4));
+                    }
+
+                    if (target) {
+                        // Found it!
+                        const data = target.palette?.data || target.palette || target.data;
+                        const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
+                        if (pal) {
+                            member.palette = { id: target.id, name: target.name, castlib: 'internal', traced: true, resolution: 'slot-lookup' };
+                            extractor.log('SUCCESS', `[Palette] Traced ${member.name} (Ref:${linkId}) -> Slot ${linkId} -> Val ${slotValue} -> ${target.name} (ID:${target.id})`);
+                            return pal;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. Cross-Cast Reference (Project Context)
+        if (extractor && extractor.projectContext) {
+            const externalMember = await extractor.projectContext.getMember(linkId);
+            if (externalMember) {
+                if (externalMember.typeId === 4 || externalMember.type === 'Palette' || externalMember.format === 'pal') {
+                    const data = externalMember.palette?.data || externalMember.palette || externalMember.data;
+                    const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
+                    if (pal) {
+                        member.palette = { id: externalMember.id, name: externalMember.name, castlib: externalMember.castlibName, traced: true, resolution: 'cross-cast' };
+                        extractor.log('SUCCESS', `[Palette] Traced ${member.name} -> ${externalMember.name} (Cross-Cast)`);
+                        return pal;
+                    }
+                } else if (externalMember.typeId === 1 || externalMember.type === 'Bitmap') {
+                    const borrowedPal = await this.tracePaletteChain(externalMember, extractor, platform, visited);
+                    if (borrowedPal) {
+                        member.palette = Object.assign({}, externalMember.palette, { traced: true, borrowedFrom: externalMember.name });
+                        extractor.log('SUCCESS', `[Palette] Traced ${member.name} -> ${externalMember.name} (Cross-Cast Borrowed)`);
+                        return borrowedPal;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     static getSystemPaletteName(id) {
         const sys = this.SystemPalette;
         const names = {
             [sys.MAC_SYSTEM]: "SystemMac",
+            [sys.LOGICAL_MAC]: "SystemMac",
             [sys.RAINBOW]: "Rainbow",
+            [sys.LOGICAL_RAINBOW]: "Rainbow",
             [sys.GRAYSCALE]: "Grayscale",
+            [sys.LOGICAL_GRAYSCALE]: "Grayscale",
             [sys.PASTELS]: "Pastels",
+            [sys.LOGICAL_PASTELS]: "Pastels",
             [sys.VIVID]: "Vivid",
+            [sys.LOGICAL_VIVID]: "Vivid",
             [sys.NTSC]: "NTSC",
+            [sys.LOGICAL_NTSC]: "NTSC",
             [sys.METALLIC]: "Metallic",
+            [sys.LOGICAL_METALLIC]: "Metallic",
             [sys.WEB_216]: "WebSafe216",
+            [sys.LOGICAL_WEB216]: "WebSafe216",
             [sys.VGA]: "VGA",
+            [sys.LOGICAL_VGA]: "VGA",
             [sys.WINDOWS_SYSTEM]: "SystemWin",
+            [sys.LOGICAL_WIN]: "SystemWin",
             [sys.WINDOWS_SYSTEM_D5]: "SystemWinD5"
         };
         return names[id] || null;
@@ -475,87 +677,73 @@ class Palette {
      * Resolves the correct palette for a member based on its properties and project context.
      * Logic moved from PaletteResolver.js
      */
-    static resolveMemberPalette(member, extractor) {
-        const { MemberType } = require('../Constants');
-        const platform = extractor.metadata.movie?.platform || 'Macintosh';
+    static async resolveMemberPalette(member, extractor) {
+        const { name, platform } = member;
 
-        if (member.bitDepth && member.bitDepth >= 16) {
-            member.palette = { id: 0, name: "TrueColor", castlib: "builtin" };
-            return null;
+        // --- FUNDAMENTAL -1: 1-bit Override ---
+        // 1-bit images in Director are strictly Black/White (Mac System).
+        // They should ignore any assigned palette ID.
+        if (member.bitDepth === 1) {
+            extractor?.log?.('INFO', `[Palette] 1-bit override for ${name}: Using Mac System (B/W)`);
+            return PALETTES.MAC;
         }
 
-        let palette = null;
-        let targetCastName = "internal";
-        if (member.castLibId > 1 && member.castLibId < 1000 && extractor.metadata.castList) {
-            const castEntry = extractor.metadata.castList[member.castLibId - 1];
-            targetCastName = castEntry ? castEntry.name : "unknown";
+        // --- FUNDAMENTAL 0: Logical ID Conversion ---
+        let logicalPaletteId = member.paletteId;
+        const hasModernBit = (member._castFlags & 0x20) !== 0;
+
+        // If modern bit is set and we have a secondary ID, use it
+        if (hasModernBit && member.secondaryPaletteId) {
+            logicalPaletteId = member.secondaryPaletteId;
         }
 
-        if (targetCastName === "internal") {
-            const internalPal = extractor.members.find(m => m.id === member.paletteId && m.typeId === MemberType.Palette);
-            if (internalPal?.palette) {
-                palette = internalPal.palette;
-                member.palette = { id: internalPal.id, name: internalPal.name, castlib: "internal" };
+        // --- FUNDAMENTAL 1: Movie Default Palette ---
+        // If paletteId is 0, we should use the movie's default palette from DRCF
+        if ((logicalPaletteId === 0 || logicalPaletteId === -1) && extractor?.metadataManager?.movieConfig?.defaultPaletteId) {
+            logicalPaletteId = extractor.metadataManager.movieConfig.defaultPaletteId;
+            extractor?.log?.('DEBUG', `[Palette] Using movie default palette: ${logicalPaletteId}`);
+        }
+
+        // --- FUNDAMENTAL 2: Trace Reference Chains ---
+        const tracedPal = await this.tracePaletteChain(member, extractor, platform);
+        if (tracedPal) return tracedPal;
+
+        // --- LEGACY HEURISTICS START ---
+        const isInternalPriority = !hasModernBit || member._compression !== 0;
+
+        // Standard System IDs - Check this early if tracing failed
+        // [MODIFIED] Commented out. Positive IDs should only be System if they were in LCTX.
+        // Otherwise, they are Cast Member IDs. If missing, fall to heuristics.
+        /*
+        if (logicalPaletteId > 0 && logicalPaletteId <= 100) {
+            const sys = this.getSystemPaletteById(logicalPaletteId, platform);
+            if (sys) {
+                member.palette = { id: logicalPaletteId, name: this.getSystemPaletteName(logicalPaletteId), castlib: 'system' };
+                return sys;
             }
         }
+        */
 
-        if (!palette && extractor.options.projectContext) {
-            const pc = extractor.options.projectContext;
-            if (targetCastName !== "internal" && targetCastName !== "unknown") {
-                const globalEntry = pc.globalPalettes.find(p =>
-                    (p.id === member.paletteId || p.id === String(member.paletteId)) &&
-                    (p.source && path.parse(p.source).name.toLowerCase() === targetCastName.toLowerCase())
-                );
+        // Contextual Search (Generic Filter: Preceding Palette in same cast)
+        if (isInternalPriority && extractor.members) {
+            const pals = extractor.members.filter(m => m.typeId === 4);
+            const preceding = pals.filter(m => m.id < member.id).sort((a, b) => b.id - a.id);
+            let internalPal = (preceding.length > 0) ? preceding[0] : null;
 
-                if (globalEntry) {
-                    member.palette = { id: globalEntry.id, name: globalEntry.name, castlib: targetCastName };
-                    palette = globalEntry.colors;
-                } else {
-                    member.palette = { id: member.paletteId, name: `Missing_Palette_${member.paletteId}`, castlib: targetCastName };
+            if (internalPal) {
+                const palData = internalPal.palette ? (internalPal.palette.data || internalPal.palette) : null;
+                const pal = palData ? this.parseDirector(palData) : null;
+                if (pal) {
+                    member.palette = { id: internalPal.id, name: internalPal.name, castlib: 'internal', heuristic: 'preceding' };
+                    return pal;
                 }
-            } else {
-                const isSmallId = (member.paletteId > 0 && member.paletteId <= 100);
-                if (!isSmallId) {
-                    const globalEntry = pc.globalPalettes.find(p => p.id === member.paletteId || p.id === String(member.paletteId));
-                    if (globalEntry) {
-                        member.palette = { id: globalEntry.id, name: globalEntry.name, castlib: globalEntry.source ? path.parse(globalEntry.source).name : "unknown" };
-                        palette = globalEntry.colors;
-                    }
-                }
             }
         }
 
-        if (!palette && !member.palette?.castlib) {
-            const shared = extractor.sharedPalettes[member.paletteId] || extractor.sharedPalettes[String(member.paletteId)];
-            if (shared) {
-                member.palette = { id: member.paletteId, name: shared.name || `shared_${member.paletteId}`, castlib: "shared" };
-                palette = shared.colors || shared;
-            }
-        }
-
-        if (!palette) {
-            const sysPalette = this.getSystemPaletteById(member.paletteId, platform);
-            if (sysPalette) {
-                const paletteName = this.getSystemPaletteName(member.paletteId) || (platform === 'Windows' ? "SystemWin" : "SystemMac");
-                if (!member.palette || member.palette.castlib === "system" || member.palette.castlib === "unknown") {
-                    member.palette = { id: member.paletteId, name: paletteName, castlib: "system" };
-                }
-                palette = sysPalette;
-            }
-        }
-
-        if (!palette) {
-            palette = (platform === 'Windows') ? this.getWindowsSystem() : this.getMacSystem7();
-            if (!member.palette) {
-                member.palette = {
-                    id: member.paletteId || (platform === 'Windows' ? -101 : -1),
-                    name: (platform === 'Windows') ? "SystemWin" : "SystemMac",
-                    castlib: "system"
-                };
-            }
-        }
-
-        return palette;
+        // Ultimate Fallback
+        const defaultId = (platform === 'Windows' ? -101 : -1);
+        member.palette = { id: defaultId, name: "System Fallback", castlib: 'system', fallback: true };
+        return this.getSystemPaletteById(defaultId, platform);
     }
 }
 

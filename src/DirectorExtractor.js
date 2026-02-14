@@ -1,10 +1,12 @@
 /**
- * @version 1.4.0
+ * @version 1.3.5
  * DirectorExtractor - Orchestrates extraction of Director RIFX files.
+ * Robust discovery architecture with clean imports.
  */
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const DirectorFile = require('./DirectorFile');
 const BaseExtractor = require('./extractor/BaseExtractor');
@@ -12,6 +14,22 @@ const MetadataManager = require('./extractor/MetadataManager');
 const MovieProcessor = require('./extractor/MovieProcessor');
 const MemberProcessor = require('./extractor/MemberProcessor');
 const ScriptHandler = require('./extractor/ScriptHandler');
+const CastMember = require('./CastMember');
+const CastManager = require('./extractor/CastManager');
+
+// Sub-Extractors
+const TextExtractor = require('./member/TextExtractor');
+const BitmapExtractor = require('./member/BitmapExtractor');
+const PaletteExtractor = require('./member/PaletteExtractor');
+const ScriptExtractor = require('./member/ScriptExtractor');
+const SoundExtractor = require('./member/SoundExtractor');
+const ShapeExtractor = require('./member/ShapeExtractor');
+const FontExtractor = require('./member/FontExtractor');
+const GenericExtractor = require('./member/GenericExtractor');
+const LingoDecompiler = require('./lingo/LingoDecompiler');
+const LnamParser = require('./lingo/LnamParser');
+const VectorShapeExtractor = require('./member/VectorShapeExtractor');
+const MovieExtractor = require('./member/MovieExtractor');
 
 const { MemberType, Magic } = require('./Constants');
 const { Palette, PALETTES } = require('./utils/Palette');
@@ -20,63 +38,52 @@ const Logger = require('./utils/Logger');
 
 class DirectorExtractor extends BaseExtractor {
     constructor(inputPath, outputDir, options = {}) {
-        super(inputPath, outputDir, {
-            extractBitmap: options.bitmap ?? true,
-            extractFont: options.font ?? true,
-            extractScript: options.script ?? true,
-            extractSound: options.sound ?? true,
-            extractPalette: options.palette ?? true,
-            extractShape: options.shape ?? true,
-            extractXtra: options.xtra ?? true,
-            extractText: options.text ?? true,
-            extractField: options.field ?? true,
-            extractVectorShape: options.vectorShape ?? true,
-            extractFilmLoop: options.filmLoop ?? true,
-            colored: options.colored ?? false,
-            projectContext: options.projectContext || null,
-            lasm: options.lasm ?? false
-        });
+        super(options);
+        this.inputPath = inputPath;
+        this.outputDir = outputDir;
+        this.castOrder = [];
+        this.projectType = 'standard';
+        this.options = options;
 
-        // Use the new standard Logger
-        this.logger = new Logger('DirectorExtractor', (lvl, msg) => super.log(lvl, msg));
+        this.logger = new Logger('DirectorExtractor', (lvl, msg) => {
+            this.extractionLog.push({ timestamp: new Date().toISOString(), lvl, msg });
+            if (['INFO', 'SUCCESS', 'ERROR', 'WARN', 'WARNING'].includes(lvl)) {
+                console.log(`[DirectorExtractor][${lvl}] ${msg}`);
+            }
+        });
 
         // Core Systems
         this.metadataManager = new MetadataManager(this);
+        this.castManager = new CastManager(this);
         this.movieProcessor = new MovieProcessor(this);
         this.memberProcessor = new MemberProcessor(this);
         this.scriptHandler = new ScriptHandler(this);
 
         this.dirFile = null;
-        this.members = [];
         this.castLibs = [];
         this.sharedPalettes = {};
         this.defaultMoviePalette = null;
+        this.stats = { total: 0, extracted: 0, failed: 0, byType: {} };
+        this.metadata = {};
 
-        // Lazy instances
-        this._extractors = {};
+        // Sub-Extractor Instances
+        const logProxy = (lvl, msg) => this.log(lvl, msg);
+        this.textExtractor = new TextExtractor(logProxy);
+        this.bitmapExtractor = new BitmapExtractor(logProxy, this, 0);
+        this.paletteExtractor = new PaletteExtractor(logProxy);
+        this.scriptExtractor = new ScriptExtractor(logProxy);
+        this.soundExtractor = new SoundExtractor(logProxy);
+        this.shapeExtractor = new ShapeExtractor(logProxy);
+        this.fontExtractor = new FontExtractor(logProxy);
+        this.genericExtractor = new GenericExtractor(logProxy);
+        this.lingoDecompiler = new LingoDecompiler(logProxy, this);
+        this.lnamParser = new LnamParser(logProxy);
+        this.vectorShapeExtractor = new VectorShapeExtractor(logProxy);
+        this.movieExtractor = new MovieExtractor(logProxy);
     }
 
-    // Dynamic getters for lazy-loading to optimize memory
-    get textExtractor() { return this._getExtractor('TextExtractor', './member/TextExtractor'); }
-    get bitmapExtractor() { return this._getExtractor('BitmapExtractor', './member/BitmapExtractor', [Palette, 0]); }
-    get paletteExtractor() { return this._getExtractor('PaletteExtractor', './member/PaletteExtractor'); }
-    get scriptExtractor() { return this._getExtractor('ScriptExtractor', './member/ScriptExtractor'); }
-    get soundExtractor() { return this._getExtractor('SoundExtractor', './member/SoundExtractor'); }
-    get shapeExtractor() { return this._getExtractor('ShapeExtractor', './member/ShapeExtractor'); }
-    get fontExtractor() { return this._getExtractor('FontExtractor', './member/FontExtractor'); }
-    get genericExtractor() { return this._getExtractor('GenericExtractor', './member/GenericExtractor'); }
-    get lingoDecompiler() { return this._getExtractor('LingoDecompiler', './lingo/LingoDecompiler'); }
-    get lnamParser() { return this._getExtractor('LnamParser', './lingo/LnamParser'); }
-    get vectorShapeExtractor() { return this._getExtractor('VectorShapeExtractor', './member/VectorShapeExtractor'); }
-    get movieExtractor() { return this._getExtractor('MovieExtractor', './member/MovieExtractor'); }
-
-    _getExtractor(name, requirePath, args = []) {
-        if (!this._extractors[name]) {
-            const ExtractorClass = require(requirePath);
-            const logProxy = (lvl, msg) => this.log(lvl, msg);
-            this._extractors[name] = new ExtractorClass(logProxy, ...args);
-        }
-        return this._extractors[name];
+    get members() {
+        return this.castManager.members;
     }
 
     log(lvl, msg) {
@@ -84,6 +91,7 @@ class DirectorExtractor extends BaseExtractor {
     }
 
     async extract() {
+        console.log(`[DEBUG_EXTRACT] Starting extract for ${this.inputPath}`);
         this.log('INFO', `Starting extraction: ${this.inputPath}`);
 
         this.dirFile = new DirectorFile(null, (lvl, msg) => this.log(lvl, msg));
@@ -94,33 +102,50 @@ class DirectorExtractor extends BaseExtractor {
 
         if (!fs.existsSync(this.outputDir)) fs.mkdirSync(this.outputDir, { recursive: true });
 
-        // Phase 1: Resource Discovery & Initialization
+        // Phase 1: Structural Discovery & Key Metadata
         await this.metadataManager.parseKeyTable();
+        await this.metadataManager.parseMCsL();
         await this.metadataManager.parseNameTable();
-        await this.metadataManager.parseLctxMap();
+        await this.metadataManager.parseDRCF();
+        await this.metadataManager.dumpCCL();
         await this.loadSharedPalettes(path.join(path.dirname(this.inputPath), 'shared_palettes.json'));
 
-        // Phase 2: Movie-wide Extraction
+        // [Discovery] Let CastManager aggregate all unique Member IDs
+        await this.castManager.discoverMembers();
+
+        // Phase 2: Metadata Enrichment & Movie-wide Extraction
         await this.movieProcessor.extractConfig();
         await this.movieProcessor.extractTimeline();
         await this.movieProcessor.extractCastList();
 
-        // Phase 3: Global Palette Collection (Pass 1)
-        const castChunks = this.dirFile.chunks.filter(c => DirectorFile.unprotect(c.type).toUpperCase() === Magic.CAST.toUpperCase());
-        for (const chunk of castChunks) {
-            const member = await this.metadataManager.parseMemberMetadata(chunk);
-            if (member && member.typeId === MemberType.Palette) {
+        // [Enrichment] Combined pass orchestration handled by CastManager
+        await this.castManager.enrichPass1();
+        await this.castManager.enrichPass2();
+
+        // Phase 3: Global Palette Collection
+        for (const member of this.members) {
+            if (member.typeId === MemberType.Palette) {
                 const map = this.metadataManager.keyTable[member.id];
                 await this.memberProcessor.processPalette(member, map);
+                if (member.palette) {
+                    this.log('INFO', `[PalettePhase] Attached palette data to Member ${member.id} (${member.name}).`);
+                }
             }
         }
 
-        // Phase 4: Member Processing (Pass 2)
-        for (const chunk of castChunks) {
-            const memberId = this.metadataManager.resToMember[chunk.id] || chunk.id;
-            const member = this.members.find(m => m.id === memberId);
-            if (!member || member.typeId === MemberType.Palette) continue; // Already processed
-            await this.memberProcessor.processMemberContent(member, chunk);
+        // Phase 4: Member Content Processing
+        for (const member of this.members) {
+            if (member.typeId === MemberType.Palette) continue;
+            const map = this.metadataManager.keyTable[member.id];
+            if (!map) continue;
+
+            const sectionId = map[Magic.CAST] || map['CAS*'] || map['CAsT'] || map['cast'] ||
+                map[Magic.BITD] || map['ABMP'] || map[Magic.STXT] || Object.values(map)[0];
+
+            const chunk = this.dirFile.getChunkById(sectionId);
+            if (chunk) {
+                await this.memberProcessor.processMemberContent(member, chunk);
+            }
         }
 
         // Phase 5: Cleanup & Finalization
@@ -156,42 +181,35 @@ class DirectorExtractor extends BaseExtractor {
                 const data = await this.dirFile.getChunkData(lscrChunks[i]);
                 if (!data) continue;
 
-                const decompiled = this.lingoDecompiler.decompile(data, this.metadataManager.nameTable);
-                if (decompiled?.text) {
-                    const outPath = path.join(this.outputDir, `${scripts[i].name}.ls`);
-                    fs.writeFileSync(outPath, decompiled.text);
+                const decompiled = this.lingoDecompiler.decompile(data, this.metadataManager.nameTable, 0, scripts[i].id, { lasm: this.options.lasm });
+                const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
+                if (source) {
+                    const lsPath = path.join(this.outputDir, `${scripts[i].name}.ls`);
+                    fs.writeFileSync(lsPath, source);
+                    if (this.options.lasm && typeof decompiled === 'object' && decompiled.lasm) {
+                        fs.writeFileSync(path.join(this.outputDir, `${scripts[i].name}.lasm`), decompiled.lasm);
+                    }
+                    if (this.options.saveLsc) {
+                        fs.writeFileSync(path.join(this.outputDir, `${scripts[i].name}.lsc`), data);
+                    }
                     scripts[i].format = 'ls';
                 }
             }
         }
     }
 
+    getCastLibHash(castLibIndex, algorithm = 'sha256') {
+        const libMembers = this.members
+            .filter(m => (m.id >> 16) + 1 === castLibIndex)
+            .sort((a, b) => a.id - b.id);
+        if (libMembers.length === 0) return crypto.createHash(algorithm).update('').digest('hex');
+        const compositeChecksum = libMembers.map(m => m.checksum).join('');
+        return crypto.createHash(algorithm).update(compositeChecksum).digest('hex');
+    }
+
     finalizeCastLibs() {
         if (this.castLibs.length === 0) return;
-
-        const crypto = require('crypto');
-
-        for (const castLib of this.castLibs) {
-            // CastLib logic: (id >> 16) + 1 matches standard Director runtime behavior where CastLibs are segmented by 65536.
-            // Verified against ProjectorRays 'minMember' logic which typically aligns with this structure.
-            // Edge case: If 'minMember' in MCsL is arbitrary and not aligned to 65536 boundaries, this might fail,
-            // but standard Director files adhere to this.
-            const libIndex = castLib.index;
-            const libMembers = this.members
-                .filter(m => (m.id >> 16) + 1 === libIndex)
-                .sort((a, b) => a.id - b.id);
-
-            if (libMembers.length > 0) {
-                const compositeChecksum = libMembers.map(m => m.checksum).join('');
-                if (compositeChecksum) {
-                    castLib.checksum = crypto.createHash('sha256').update(compositeChecksum).digest('hex');
-                }
-            } else {
-                // Empty CastLib gets a consistent hash of an empty string
-                castLib.checksum = crypto.createHash('sha256').update('').digest('hex');
-            }
-        }
-
+        for (const castLib of this.castLibs) castLib.checksum = this.getCastLibHash(castLib.index);
         fs.writeFileSync(path.join(this.outputDir, 'castlibs.json'), JSON.stringify({ casts: this.castLibs }, null, 2));
     }
 }

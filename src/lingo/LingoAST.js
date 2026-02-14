@@ -1,5 +1,5 @@
 /**
- * @version 1.3.0
+ * @version 1.3.5
  * LingoAST.js
  * 
  * Abstract Syntax Tree (AST) nodes used to represent Lingo source code 

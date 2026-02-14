@@ -1,5 +1,5 @@
 /**
- * @version 1.3.0
+ * @version 1.3.5
  * LnamParser.js
  * 
  * Parses Lingo Name Table (Lnam) chunks into symbol arrays.
@@ -17,10 +17,9 @@ class LnamParser {
      * @param {Buffer} buffer - Raw Lnam chunk data.
      * @returns {string[]} Array of symbol names.
      */
-    parse(buffer) {
+    parse(buffer, endianness = 'big') {
         try {
-            // Lingo metadata is always big-endian.
-            const stream = new DataStream(buffer, 'big');
+            const stream = new DataStream(buffer, endianness);
 
             // Header fields (some are unknown/reserved)
             const unknown0 = stream.readInt32();

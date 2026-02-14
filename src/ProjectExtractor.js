@@ -1,5 +1,5 @@
 /**
- * @version 1.3.0
+ * @version 1.3.5
  * ProjectExtractor.js - Multi-file orchestration & Global Resource Management
  * 
  * Handles the recursive discovery of linked cast libraries (.cct/.cst) and 
@@ -26,9 +26,9 @@ class ProjectExtractor {
         this.entryPath = entryPath;
         this.baseDir = path.dirname(entryPath);
         this.options = options;
-        this.log = logger || ((lvl, msg) => { });
+        this.log = logger || ((lvl, msg) => console.log(`[ProjectExtractor][${lvl}] ${msg}`));
         this.loadedCasts = [];
-        this.globalPalettes = [];
+        this.globalPalettes = {};
         this.isReady = false;
     }
 
@@ -38,9 +38,31 @@ class ProjectExtractor {
     async init() {
         this.log('INFO', `Initializing project context from ${path.basename(this.entryPath)}...`);
         await this.loadCast(this.entryPath, true);
+        if (this.options.scanDirectory) await this.scanDirectoryPalettes();
         this.buildGlobalPaletteList();
         this.isReady = true;
-        this.log('SUCCESS', `Project context ready. Loaded ${this.loadedCasts.length} casts.`);
+        this.log('SUCCESS', `Project context ready. Loaded ${this.loadedCasts.length} casts. Global palettes: ${Object.keys(this.globalPalettes).length}`);
+    }
+
+    /**
+     * Scans the base directory for all cast files and indexes their palettes.
+     */
+    async scanDirectoryPalettes() {
+        this.log('INFO', `Scanning directory for extra palettes: ${this.baseDir}`);
+        const files = fs.readdirSync(this.baseDir);
+        for (const file of files) {
+            if (file.toLowerCase().endsWith('.cct') || file.toLowerCase().endsWith('.cst')) {
+                const fullPath = path.join(this.baseDir, file);
+                // Avoid reloading already loaded casts
+                if (this.loadedCasts.some(c => path.resolve(c.path) === path.resolve(fullPath))) continue;
+
+                try {
+                    await this.loadCast(fullPath, false);
+                } catch (e) {
+                    this.log('DEBUG', `Failed to scan ${file} for palettes: ${e.message}`);
+                }
+            }
+        }
     }
 
     /**
@@ -55,8 +77,7 @@ class ProjectExtractor {
         const buffer = fs.readFileSync(filePath);
         const df = new DirectorFile(buffer, this.log);
         await df.parse();
-
-        if (isEntry) await this.discoverLinkedCasts(df);
+        await this.discoverLinkedCasts(df);
 
         const keyChunk = df.chunks.find(c => [Magic.KEY, 'KEY ', Magic.KEYStar].includes(c.type));
         const memberMap = {};
@@ -122,6 +143,7 @@ class ProjectExtractor {
         if (!mcsl) return;
 
         const data = await df.getChunkData(mcsl);
+        if (!data) return;
         const rawStrings = data.toString('utf8').replace(/[^\x20-\x7E]/g, '\0').split('\0').filter(s => s.length > 2);
         const castList = [];
 
@@ -152,16 +174,32 @@ class ProjectExtractor {
      * Aggregates all discovered palettes into a prioritized global list.
      */
     buildGlobalPaletteList() {
-        this.globalPalettes = [
-            { colors: Palette.getMacSystem7(), name: "System_Mac", source: "System" },
-            { colors: Palette.getWindowsSystem(), name: "System_Win", source: "System" }
-        ];
+        // Built-in palettes
+        this.addPaletteReference("System_Mac", Palette.getMacSystem7(), "System");
+        this.addPaletteReference("System_Win", Palette.getWindowsSystem(), "System");
 
         for (const cast of this.loadedCasts) {
             for (const clut of cast.cluts) {
                 const colors = this.parseRawColors(clut.data);
-                if (colors) this.globalPalettes.push({ id: clut.id, colors, name: clut.name, source: clut.source });
+                if (colors) {
+                    this.addPaletteReference(clut.name, colors, clut.source);
+                }
             }
+        }
+    }
+
+    /**
+     * Internal helper to track palette color data and its sources.
+     */
+    addPaletteReference(name, colors, source) {
+        if (!this.globalPalettes[name]) {
+            this.globalPalettes[name] = {
+                colors: colors,
+                references: []
+            };
+        }
+        if (!this.globalPalettes[name].references.includes(source)) {
+            this.globalPalettes[name].references.push(source);
         }
     }
 
@@ -172,15 +210,38 @@ class ProjectExtractor {
         return Palette.parseDirector(buffer);
     }
 
-    getPalette(id) {
-        return this.globalPalettes.find(p => p.id === id || p.id === String(id))?.colors;
+    getPalette(idOrName) {
+        // Search by ID (legacy) or Name (modern)
+        if (this.globalPalettes[idOrName]) {
+            return this.globalPalettes[idOrName].colors;
+        }
+
+        // Fallback: search by id property in objects (if any were added with numeric keys)
+        return null;
+    }
+
+    /**
+     * Persists the consolidated global palette registry to disk.
+     */
+    savePalettes(outputDir) {
+        const palettesPath = path.join(outputDir, 'palettes.json');
+        fs.writeFileSync(palettesPath, JSON.stringify(this.globalPalettes, null, 2));
+        this.log('SUCCESS', `Global palettes saved to: ${palettesPath}`);
     }
 
     getDefaultPalette() {
         const entryBase = path.basename(this.entryPath);
-        const MoviePal = this.globalPalettes.find(p => p.source === entryBase && p.source !== "System");
-        if (MoviePal) return MoviePal;
-        return this.globalPalettes.find(p => p.source !== "System") || this.globalPalettes[0];
+        // Look for any palette belonging to the movie
+        for (const [name, data] of Object.entries(this.globalPalettes)) {
+            if (data.references.includes(entryBase) && !name.startsWith("System_")) {
+                return data.colors;
+            }
+        }
+        // Fallback to first non-system palette
+        for (const [name, data] of Object.entries(this.globalPalettes)) {
+            if (!name.startsWith("System_")) return data.colors;
+        }
+        return Palette.getMacSystem7();
     }
 }
 

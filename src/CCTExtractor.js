@@ -1,5 +1,5 @@
 /**
- * @version 1.3.0
+ * @version 1.3.5
  * CCTExtractor.js - Standalone Cast Library extraction utility
  * 
  * Simple orchestrator for processing .cct or .cst files. Leverages 
@@ -31,7 +31,7 @@ class CCTExtractor {
         try {
             return await extractor.extract();
         } catch (e) {
-            console.error(`[CCTExtractor][ERROR] Extraction failed: ${e.message}`);
+            console.error(`[CCTExtractor][ERROR] Extraction failed:`, e);
             throw e;
         }
     }

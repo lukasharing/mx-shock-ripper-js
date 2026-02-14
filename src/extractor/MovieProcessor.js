@@ -24,6 +24,7 @@ class MovieProcessor {
         const ds = new DataStream(data, 'big');
         const len = ds.readInt16();
         const fileVer = ds.readInt16();
+        this.extractor.log('INFO', `[MovieProcessor] DRCF Version: ${fileVer}`);
         const stage = { top: ds.readInt16(), left: ds.readInt16(), bottom: ds.readInt16(), right: ds.readInt16() };
 
         const minMember = ds.readInt16();
@@ -31,7 +32,7 @@ class MovieProcessor {
 
         ds.seek(36);
         const dirVer = ds.readInt16();
-        const ver = dirVer; // Placeholder for humanVersion logic
+        const ver = dirVer;
         const verNum = parseInt(String(ver).replace(/\./g, '')) || 0;
 
         let stageColor = "#FFFFFF";
@@ -141,7 +142,6 @@ class MovieProcessor {
         if (!data) return;
 
         const ds = new DataStream(data, 'big');
-        // Structure: [Total Len: 4] [Unknown: 2] [Cast Count: 2] [Items Per Cast: 2]
         const dataOffset = ds.readUint32();
         if (dataOffset >= data.length) {
             this.extractor.log('WARN', `Invalid cast list data offset: ${dataOffset}. Skipping cast extraction.`);

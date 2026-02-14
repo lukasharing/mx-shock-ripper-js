@@ -1,5 +1,5 @@
 /**
- * @version 1.3.0
+ * @version 1.3.5
  * Config.js - General configuration and structural thresholds for Lingo
  */
 
@@ -46,7 +46,8 @@ module.exports = {
         INT: 2,
         FLOAT: 3,
         SYMBOL: 4,
-        LIST: 5
+        LIST: 5,
+        FLOAT_V4: 9
     },
     COMMANDS_WITHOUT_PARENS: ['put', 'alert', 'set', 'go'],
     Labels: {

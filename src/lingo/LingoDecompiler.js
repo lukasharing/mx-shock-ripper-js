@@ -1,5 +1,5 @@
 /**
- * @version 1.3.0
+ * @version 1.3.5
  * LingoDecompiler.js
  * 
  * High-performance Lingo bytecode decompiler using a multi-phase 
@@ -28,7 +28,10 @@ class LingoStack {
 }
 
 class LingoDecompiler {
-    constructor(logger) { this.log = logger || ((lvl, msg) => { }); }
+    constructor(logger, extractor) {
+        this.log = logger || ((lvl, msg) => { });
+        this.extractor = extractor;
+    }
 
     /**
      * Main entry point for decompiling a Lingo script.
@@ -43,7 +46,8 @@ class LingoDecompiler {
             if (lscrData.length < 132) {
                 return options.lasm ? { source: "-- Script buffer too small/encrypted", lasm: "" } : "-- Script buffer too small/encrypted";
             }
-            const stream = new DataStream(lscrData, 'big');
+            const endianness = options.endianness || 'big';
+            const stream = new DataStream(lscrData, endianness);
             const { hLen, sType, map } = this._getSchema(lscrData, externalScriptType);
             const cal = this._getCalibration(lscrData, nameTable, map, hLen, sType);
 
@@ -295,7 +299,8 @@ class LingoDecompiler {
         switch (type) {
             case LingoConfig.LITERAL_TYPE.INT: return new AST.IntLiteral(stream.readInt32());
             case LingoConfig.LITERAL_TYPE.STRING: const sl = stream.readUint32(); return new AST.StringLiteral(sl > 0 ? stream.readString(sl - 1) : "");
-            case LingoConfig.LITERAL_TYPE.FLOAT: stream.readUint32(); return new AST.FloatLiteral(stream.readDouble());
+            case LingoConfig.LITERAL_TYPE.FLOAT:
+            case LingoConfig.LITERAL_TYPE.FLOAT_V4: stream.readUint32(); return new AST.FloatLiteral(stream.readDouble());
             case LingoConfig.LITERAL_TYPE.SYMBOL: const syl = stream.readUint32(); return new AST.SymbolLiteral(syl > 0 ? stream.readString(syl - 1) : "");
             case LingoConfig.LITERAL_TYPE.LIST:
                 const count = stream.readUint32();
@@ -378,7 +383,8 @@ class LingoDecompiler {
 
             // Handle variable length opcodes
             if (op >= 0xc0) {
-                obj = (idx === 0x6f) ? stream.readInt32() : stream.readUint32();
+                if (idx === 0x31) obj = stream.readFloat();
+                else obj = (idx === 0x6f) ? stream.readInt32() : stream.readUint32();
                 len = 5;
             } else if (op >= 0x80) {
                 obj = [0x41, 0x6e, 0x53, 0x54, 0x55, 0x56, 0x6f].includes(idx) ? stream.readInt16() : stream.readUint16();
@@ -402,6 +408,11 @@ class LingoDecompiler {
         switch (op) {
             case 'ret':
                 let rv = stack.pop();
+                // Allow void returns (stack underflows) anywhere - they're valid Lingo patterns
+                if (rv instanceof AST.ERROR) {
+                    ast.addStatement(new AST.ReturnStatement(null));
+                    break;
+                }
                 if (rv instanceof AST.ArgListLiteral) rv = (rv.value.length === 1) ? rv.value[0] : rv;
                 if (rv?.toString() === '0' && ctx.index >= ctx.codes.length - 2) return;
                 const last = ast.currentBlock.statements[ast.currentBlock.statements.length - 1];
@@ -423,10 +434,16 @@ class LingoDecompiler {
                 stack.push(new AST.SymbolLiteral(resolver(bc.obj, "handle"))); break;
             case 'pushvarref': case 'push_var':
                 stack.push(new AST.VarReference(resolver(bc.obj, "handle"))); break;
-            case 'push_global':
+            case 'pushfloat32':
+                stack.push(new AST.FloatLiteral(bc.obj)); break;
+            case 'pushchunkvarref':
+                stack.push(new AST.VarReference(resolver(bc.obj, "handle"))); break; // TODO: Better chunk ref
+            case 'getglobal': case 'getglobal2': case 'push_global':
                 stack.push(new AST.VarReference(resolver(bc.obj, "global"))); break;
-            case 'push_prop':
+            case 'getprop': case 'push_prop':
                 stack.push(new AST.PropertyReference(resolver(bc.obj, "handle"))); break;
+            case 'setglobal': case 'setglobal2':
+                ast.addStatement(new AST.AssignmentStatement(new AST.VarReference(resolver(bc.obj, "global")), stack.pop())); break;
 
             case 'inv': stack.push(new AST.InverseOperator(stack.pop())); break;
             case 'not': stack.push(new AST.NotOperator(stack.pop())); break;
@@ -468,6 +485,14 @@ class LingoDecompiler {
                 const sName = resolver(bc.obj, "movie_prop"), sPath = ['_player', '_system', 'traceScript'].includes(sName) ? '_movie.' + sName : 'the ' + sName;
                 ast.addStatement(new AST.AssignmentStatement(new AST.VarReference(sPath), stack.pop())); break;
 
+            case 'thebuiltin': {
+                // Built-in function call - args are already on stack as arglist
+                const builtinArgs = stack.pop();
+                const builtinName = resolver(bc.obj, "handle");
+                stack.push(new AST.CallStatement(builtinName, builtinArgs));
+                break;
+            }
+
             case 'localcall': case 'extcall': case 'tellcall': case 'call': case 'call_ext':
                 let callFn, callArgs = stack.pop();
                 if (op === 'localcall') {
@@ -477,18 +502,18 @@ class LingoDecompiler {
                     callFn = resolver(bc.obj, "handle");
                 }
 
-                if ((op === 'extcall' || op === 'call_ext') && bc.obj === LingoConfig.SPECIAL_IDS.EXT_CALL_MAGIC) {
-                    let resVal = (callArgs instanceof AST.ArgListLiteral && callArgs.value.length === 1) ? callArgs.value[0] : callArgs;
-                    ast.addStatement(new AST.ReturnStatement(resVal));
-                } else if (['me', 'constant', 'return'].includes(callFn)) {
-                    let resVal = (callArgs instanceof AST.ArgListLiteral && callArgs.value.length === 1) ? callArgs.value[0] : callArgs;
-                    stack.push(resVal);
-                } else if (callFn === 'void') {
-                    stack.push(new AST.VarReference('VOID'));
+                if (['me', 'constant'].includes(callFn)) {
+                    let metaVal = (callArgs instanceof AST.ArgListLiteral && callArgs.value.length === 1) ? callArgs.value[0] : callArgs;
+                    if (callFn === 'me') stack.push(new AST.VarReference('me'));
+                    else stack.push(metaVal);  // 'constant' case
                 } else {
-                    const callStmt = new AST.CallStatement(callFn, callArgs);
-                    if (callArgs?.noRet) ast.addStatement(callStmt);
-                    else stack.push(callStmt);
+                    const callExpr = new AST.CallStatement(callFn, callArgs);
+                    // Check if the arglist was created with pusharglistnoret
+                    if (callArgs?.noRet) {
+                        ast.addStatement(callExpr);
+                    } else {
+                        stack.push(callExpr);
+                    }
                 }
                 break;
 
@@ -537,7 +562,7 @@ class LingoDecompiler {
                 else stack.push(objCallNode);
                 break;
 
-            case 'getobjprop': case 'get_prop_obj': {
+            case 'getobjprop': case 'get_prop_obj': case 'getchainedprop': {
                 const objP = stack.pop(), propId = resolver(bc.obj, "handle");
                 if (objP) stack.push(new AST.BinaryOperator('.', objP, new AST.VarReference(propId))); break;
             }

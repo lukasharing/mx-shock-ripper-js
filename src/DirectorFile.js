@@ -1,5 +1,5 @@
 /**
- * @version 1.3.0
+ * @version 1.3.5
  * DirectorFile.js - Core logic for parsing .dcr and .cct files.
  */
 
@@ -11,7 +11,7 @@ const { Magic, AfterburnerTags, Limits } = require('./Constants');
 class DirectorFile {
     constructor(buffer, logger) {
         this.ds = buffer ? new DataStream(buffer) : null;
-        this.log = logger || ((lvl, msg) => { });
+        this.log = logger || ((lvl, msg) => console.log(`[DirectorFile][${lvl}] ${msg}`));
         this.chunks = [];
         this.cachedViews = {};
         this.isAfterburned = false;
@@ -46,65 +46,75 @@ class DirectorFile {
     }
 
     async parse() {
+        if (!this.ds) return;
         const magic = this.ds.readFourCC();
+        const size = this.ds.readUint32();
 
-        if (magic === Magic.XFIR) {
+        this.isLittleEndianFile = (magic === Magic.XFIR);
+
+        if (this.isLittleEndianFile) {
             this.ds.endianness = 'little';
             this.format = 'rifx-little';
-            this.isLittleEndianFile = true;
-        } else if (magic === Magic.FGDC) {
-            this.isAfterburned = true;
-            this.format = 'afterburner';
-        } else if (magic === Magic.RIFX) {
-            this.format = 'rifx-big';
         } else {
-            throw new Error(`Unsupported file format: ${magic}`);
+            this.ds.endianness = 'big';
+            this.format = 'rifx-big';
         }
 
-        if (this.isAfterburned) {
-            await this.calculateAfterburnedStructure();
-        } else {
-            this.ds.readUint32(); // skip size
-            this.subtype = this.ds.readFourCC();
+        const internalMagic = this.ds.readFourCC();
 
-            // Detect hidden Afterburner subtypes
-            if ([Magic.FGDC, Magic.CDGF, Magic.FGDM, Magic.MDGF].includes(this.subtype)) {
-                this.isAfterburned = true;
-                this.format = 'afterburner';
-                // If we found CDGF (reversed FGDC), we are in little-endian space
-                if (this.subtype === Magic.CDGF || this.subtype === Magic.MDGF) {
-                    this.ds.endianness = 'little';
-                }
-                await this.calculateAfterburnedStructure();
-            } else {
-                await this.parseUncompressedStructure();
-            }
+        // Handle Afterburner variants:
+        // FGDC (CCT), FGDM (DCR)
+        // CDGF (byte-swapped FGDC), MDGF (byte-swapped FGDM)
+        const isAfterburner = [Magic.FGDC, Magic.FGDM, 'CDGF', 'MDGF'].includes(magic) ||
+            [Magic.FGDC, Magic.FGDM, 'CDGF', 'MDGF'].includes(internalMagic);
+
+        if (isAfterburner) {
+            this.isAfterburned = true;
+            this.format = 'afterburner';
+            await this.calculateAfterburnedStructure();
+        } else if (magic === Magic.XFIR || magic === Magic.RIFX) {
+            // Uncompressed RIFX
+            await this.parseUncompressedStructure();
+        } else {
+            throw new Error(`Unsupported file format: ${magic}`);
         }
     }
 
     async parseUncompressedStructure() {
         let mmapOff = 0;
         this.ds.seek(12);
+        this.subtype = this.ds.readFourCC();
 
+        // Standard RIFX search for IMAP/MMAP
+        this.ds.seek(12);
         while (this.ds.position + 12 < this.ds.buffer.length) {
             const tag = this.ds.readFourCC();
             const len = this.ds.readUint32();
 
-            if (tag === Magic.IMAP || tag === Magic.imap) {
+            if (tag === Magic.IMAP || tag === Magic.imap || tag === 'pami') {
                 this.ds.skip(4);
                 mmapOff = (this.ds.endianness === 'little') ? this.ds.buffer.readUInt32LE(this.ds.position) : this.ds.buffer.readUInt32BE(this.ds.position);
                 break;
-            } else if (tag === Magic.MMAP || tag === Magic.mmap) {
+            } else if (tag === Magic.MMAP || tag === Magic.mmap || tag === 'pamm') {
                 mmapOff = this.ds.position - 8;
                 break;
             }
             this.ds.skip(Math.max(0, len));
         }
 
-        if (!mmapOff) throw new Error('Failed to locate Memory Map (mmap)');
+        if (!mmapOff) {
+            // Check for ILS directly (protected casts often have this)
+            this.ds.seek(8);
+            const tag = this.ds.readFourCC();
+            if (tag === Magic.ILS || tag === 'ILS ' || tag === ' ,i') {
+                await this._parseILS();
+                return;
+            }
+            throw new Error(`Failed to locate Memory Map (mmap) in ${this.format} file.`);
+        }
 
         this.ds.seek(mmapOff);
-        this.ds.readFourCC(); // mmap
+        this.ds.readFourCC(); // mmap / pamm
         this.ds.readUint32(); // len
         this.ds.skip(4);
         this.ds.readInt32(); // maxChunks
@@ -115,16 +125,68 @@ class DirectorFile {
             const tag = this.ds.readFourCC();
             const len = this.ds.readUint32();
             const off = this.ds.readUint32();
-            this.ds.skip(8);
+
+            let uncompLen = 0;
+            let compType = 0;
+            let flags = 0;
+            let link = 0;
+
+            if (this.isAfterburned) {
+                uncompLen = this.ds.readUint32();
+                compType = this.ds.readUint32();
+            } else {
+                flags = this.ds.readUint32();
+                link = this.ds.readInt32();
+            }
 
             if (off > 0) {
-                this.chunks.push({ type: tag, len, off, id: i });
+                console.log(`[DirectorFile] Pushing chunk: ${tag} (PID ${i}) at off ${off}`);
+                this.chunks.push({
+                    type: tag,
+                    len,
+                    off,
+                    id: i,
+                    uncompLen,
+                    compType,
+                    flags,
+                    link
+                });
             }
         }
     }
 
+    async _parseILS() {
+        const ds = this.ds;
+        ds.seek(8);
+        const magic = ds.readFourCC(); // ILS 
+        const totalLen = ds.readUint32();
+        const headerLen = ds.readUint32();
+        const count = ds.readUint32();
+
+        if (count > 0xFFFF) {
+            // Misread count likely means endianness issue in ILS chunk
+            this.log('WARNING', `Absurd ILS chunk count: ${count}. Retrying with swapped endianness.`);
+            this.ds.endianness = this.ds.endianness === 'big' ? 'little' : 'big';
+            ds.seek(8 + 4 + 4);
+            // Re-read count
+            const count2 = ds.readUint32();
+            // If still absurd, we're stuck
+        }
+
+        for (let i = 0; i < count; i++) {
+            const tag = ds.readFourCC();
+            const len = ds.readUint32();
+            const off = ds.readUint32();
+            console.log(`[DirectorFile] ILS Pushing: ${tag} (PID ${i}) at off ${off}`);
+            this.chunks.push({ type: tag, len, off, id: i });
+        }
+        this.log('INFO', `Loaded ILS with ${this.chunks.length} chunks.`);
+    }
+
     async calculateAfterburnedStructure() {
         try {
+            // FGDC structure: Fver, Fmap, Fcdr, Abmp, [Fgei + InlineStream]
+            // We search for these sequentially
             await this._parseFver();
             await this._parseFmap();
             await this._parseFcdr();
@@ -138,29 +200,23 @@ class DirectorFile {
     }
 
     async _autoDetectEndianness() {
-        // If we already know we are XFIR, we are little-endian. Don't second-guess.
-        if (this.isLittleEndianFile) {
-            this.ds.endianness = 'little';
-            return;
-        }
-        // Heuristic: Check Lnam or Key* chunk for sanity
-        const lnam = this.getChunkById(1) || this.chunks.find(c => DirectorFile.unprotect(c.type) === 'Lnam');
-        if (lnam) {
-            const data = await this.getChunkData(lnam);
-            if (data && data.length >= 16) {
-                const ds = new DataStream(data, this.ds.endianness);
-                ds.readInt32(); // unk0
-                ds.readInt32(); // unk1
-                const len1 = ds.readUint32();
-                // If len1 is absurdly large relative to buffer, wrong endianness
-                if (len1 > data.length + 10000 && len1 > 0x100000) {
-                    this.log('INFO', `Auto-detected endianness mismatch. Switched from ${oldEndian} to ${this.ds.endianness}.`);
+        if (this.isLittleEndianFile) return;
 
-                    // Re-check to be sure?
-                    ds.endianness = this.ds.endianness;
-                    ds.seek(8);
-                    const len1New = ds.readUint32();
+        // Heuristic: Check KEY* chunk for sanity
+        const checkChunk = this.chunks.find(c => DirectorFile.unprotect(c.type) === 'KEY*');
 
+        if (checkChunk) {
+            const data = await this.getChunkData(checkChunk);
+            if (data && data.length >= 12) {
+                const oldEndian = this.ds.endianness;
+                const ds = new DataStream(data, oldEndian);
+                const firstWord = ds.readUint16();
+
+                if (firstWord > 0xFF && (firstWord & 0xFF) === 0x01) {
+                    // Looks like swapped 0x0114 or similar
+                } else if (firstWord > 0x1000) {
+                    this.ds.endianness = (oldEndian === 'big') ? 'little' : 'big';
+                    this.log('INFO', `Auto-detected endianness mismatch in KEY*. Switched from ${oldEndian} to ${this.ds.endianness}.`);
                 }
             }
         }
@@ -194,36 +250,50 @@ class DirectorFile {
         if (tag === Magic.FCDR) {
             this.ds.readFourCC();
             const fcdrLen = this.ds.readVarInt();
-            const fcdrDecomp = zlib.inflateSync(this.ds.readBytes(fcdrLen));
-            const fcdrDS = new DataStream(fcdrDecomp, this.ds.endianness);
+            const rawDecomp = zlib.inflateSync(this.ds.readBytes(fcdrLen));
+
+            // In modern files, FCDR often contains a metadata string 
+            // ("Macromedia ziplib compression...") instead of actual catalog entries.
+            const headerStr = rawDecomp.slice(0, 128).toString('ascii');
+            if (headerStr.includes('Macromedia')) {
+                this.log('DEBUG', 'FCDR contains metadata string, skipping as catalog.');
+                return;
+            }
+
+            const fcdrDS = new DataStream(rawDecomp, 'big');
+            if (fcdrDS.buffer.length < 2) return;
             const entryCount = fcdrDS.readUint16();
 
             for (let i = 0; i < entryCount; i++) {
-                const tag = fcdrDS.readFourCC();
+                if (fcdrDS.position + 16 > fcdrDS.buffer.length) break;
+                const entryTag = fcdrDS.readFourCC();
                 const len = fcdrDS.readUint32();
                 const off = fcdrDS.readUint32();
                 fcdrDS.readUint32(); // Unknown/Flags
                 if (off > 0) {
-                    this.chunks.push({ type: DirectorFile.unprotect(tag), len, off, id: i });
+                    this.chunks.push({ type: DirectorFile.unprotect(entryTag), len, off, id: i });
                 }
             }
         }
     }
+
     async _parseAbmp() {
         const tag = DirectorFile.unprotect(this.ds.peekFourCC());
         if ([Magic.ABMP, Magic.PMBA].includes(tag) || tag.toUpperCase() === 'ABMP') {
-            this.ds.readFourCC();
+            this.ds.readFourCC(); // Read the tag
             const abmpLen = this.ds.readVarInt();
-            const abmpEnd = this.ds.position + abmpLen;
-            this.ds.readVarInt(); // skip version?
-            this.ds.readVarInt();
-            const abmpDecomp = zlib.inflateSync(this.ds.readBytes(abmpEnd - this.ds.position));
-            const abmpDS = new DataStream(abmpDecomp, this.ds.endianness);
+            const abmpDataEnd = this.ds.position + abmpLen;
+            this.ds.readVarInt(); // h1
+            this.ds.readVarInt(); // h2
+
+            const compressed = this.ds.readBytes(abmpDataEnd - this.ds.position);
+            const decompressed = zlib.inflateSync(compressed);
+
+            const abmpDS = new DataStream(decompressed, this.ds.endianness);
             abmpDS.readVarInt(); // v1
             abmpDS.readVarInt(); // v2
             const resCount = abmpDS.readVarInt();
 
-            // Read entries with inline tags
             for (let i = 0; i < resCount; i++) {
                 const resId = abmpDS.readVarInt();
                 const offset = abmpDS.readVarInt();
@@ -239,7 +309,9 @@ class DirectorFile {
                     uncompLen: uncompSize,
                     off: offset,
                     id: resId,
-                    compType: compTypeIdx
+                    compType: compTypeIdx,
+                    flags: 0,
+                    link: 0
                 });
             }
         }
@@ -249,11 +321,14 @@ class DirectorFile {
         const tag = DirectorFile.unprotect(this.ds.peekFourCC());
         if (tag === Magic.FGEI || tag === Magic.IEGF) {
             this.ds.readFourCC();
-            this.ds.readVarInt();
+            const ilsIndex = this.ds.readVarInt();
+            this.log('DEBUG', `FGEI points to ILS directory index: ${ilsIndex}`);
             this.ilsBodyOffset = this.ds.position;
-            const ilsInfo = this.chunks.find(c => c.id === 2);
+            const ilsInfo = this.chunks[ilsIndex];
             if (ilsInfo) {
                 await this.loadInlineStream(ilsInfo);
+            } else {
+                this.log('WARNING', `ILS directory chunk at index ${ilsIndex} not found.`);
             }
         }
     }
@@ -261,81 +336,73 @@ class DirectorFile {
     async loadInlineStream(ilsInfo) {
         try {
             const decomp = await this.getChunkData(ilsInfo);
-            if (!decomp) return;
+            if (!decomp) {
+                this.log('WARNING', `Could not get data for ILS directory chunk ${ilsInfo.id}`);
+                return;
+            }
             const ilsDS = new DataStream(decomp, this.ds.endianness);
-
             while (ilsDS.position < ilsDS.buffer.length) {
                 const resId = ilsDS.readVarInt();
                 const chunkInfo = this.chunks.find(c => c.id === resId);
-
                 if (chunkInfo) {
-                    if (chunkInfo.len > Limits.InternalStreamSafetyLimit) break;
-                    if (ilsDS.position + chunkInfo.len > ilsDS.buffer.length) break;
-
+                    if (chunkInfo.len > Limits.InternalStreamSafetyLimit) {
+                        this.log('WARNING', `Chunk ${resId} too large for ILS: ${chunkInfo.len}`);
+                        break;
+                    }
+                    if (ilsDS.position + chunkInfo.len > ilsDS.buffer.length) {
+                        this.log('WARNING', `ILS body overflow at resId ${resId}`);
+                        break;
+                    }
                     this.cachedViews[resId] = ilsDS.readBytes(chunkInfo.len);
                 } else {
-                    // Abmp should be authoritative. If we hit an ID not in Abmp with unknown len, we are stuck.
+                    this.log('DEBUG', `Unknown resId ${resId} in ILS directory.`);
                     break;
                 }
             }
+            this.log('INFO', `Loaded ILS with ${Object.keys(this.cachedViews).length} chunks.`);
         } catch (e) {
-            this.log('ERROR', `Error decompressing ILS data: ${e.message}`);
+            this.log('ERROR', `Failed to load Inline Stream: ${e.message}`);
         }
     }
 
     async getChunkData(chunk) {
-        if (!chunk || chunk.off === undefined) return null; // Changed 'offset' to 'off' to match existing chunk structure
+        if (!chunk) return null;
+        if (this.cachedViews[chunk.id]) return this.cachedViews[chunk.id];
 
-        try {
-            let rawData;
-            if (this.format === 'afterburner') {
-                this.ds.seek(this.ilsBodyOffset + chunk.off);
-                rawData = this.ds.readBytes(chunk.len);
-
-                // Decompress if compType indicates it OR if uncompLen differs from chunk len (even if smaller)
-                if (chunk.compType === 1 || (chunk.uncompLen > 0 && chunk.uncompLen !== chunk.len)) {
-                    return this._safeDecompress(rawData, 'zlib');
-                }
-            } else {
-                this.ds.seek(chunk.off + 8);
-                rawData = this.ds.readBytes(chunk.len);
-            }
-
-            // Note: PackBits usually needs an expected size, which might not be in the chunk entry.
-            // This is handled in specialized extractors (like BitmapExtractor).
-            // For now, if it's not zlib, return raw.
-            return rawData;
-        } catch (e) {
-            this.log('ERROR', `Failed to read chunk ${chunk.type}: ${e.message}`);
+        if (this.isAfterburned && (chunk.off === undefined || chunk.off === -1)) {
             return null;
         }
-    }
 
-    _safeDecompress(data, type) {
+        if (chunk.off === undefined) return null;
+
+        let data;
         try {
-            if (type === 'zlib') return zlib.inflateSync(data);
-            // Add other decompression types here if needed
-            return data;
-        } catch (e) {
-            this.log('WARNING', `Decompression failed (${type}): ${e.message}`);
-            // Attempt fallback for zlib if it fails
-            if (type === 'zlib') {
+            this.ds.seek(this.isAfterburned ? (this.ilsBodyOffset + chunk.off) : (chunk.off + 8));
+            const raw = this.ds.readBytes(chunk.len);
+
+            if (chunk.compType === 1 || (chunk.uncompLen > 0 && chunk.uncompLen !== chunk.len)) {
                 try {
-                    return zlib.inflateRawSync(data);
-                } catch (e2) {
+                    data = zlib.inflateSync(raw);
+                } catch (e) {
                     try {
-                        if (data.length > 4) {
-                            return zlib.inflateRawSync(data.slice(4));
+                        data = zlib.inflateRawSync(raw);
+                    } catch (e2) {
+                        if (raw.length > 4) {
+                            try { data = zlib.inflateRawSync(raw.slice(4)); } catch (e) { data = raw; }
+                        } else {
+                            data = raw;
                         }
-                    } catch (e3) {
-                        // Fallback to raw data if all decompression attempts fail
-                        this.log('WARNING', `All zlib decompression attempts failed, returning raw data.`);
-                        return data;
                     }
                 }
+            } else {
+                data = raw;
             }
-            return data; // Return raw data if decompression fails or type is unknown
+        } catch (e) {
+            return null;
         }
+
+        if (data) this.cachedViews[chunk.id] = data;
+        return data;
     }
 
     static unprotect(tag) {

@@ -1,5 +1,5 @@
 /**
- * @version 1.3.0
+ * @version 1.3.5
  * DCRExtractor.js - Full project orchestrator for Adobe Director (.dcr)
  * 
  * Handles multi-file extraction by loading the entry movie and recursively 
@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const DirectorExtractor = require('./DirectorExtractor');
 const ProjectExtractor = require('./ProjectExtractor');
+const Logger = require('./utils/Logger');
 
 class DCRExtractor {
     /**
@@ -23,6 +24,7 @@ class DCRExtractor {
         this.outputDir = outputDir;
         this.options = options;
         this.baseName = path.parse(inputPath).name;
+        this.log = (lvl, msg) => console.log(`[DCRExtractor][${lvl}] ${msg}`);
     }
 
     /**
@@ -32,7 +34,7 @@ class DCRExtractor {
 
 
         // 1. Context Discovery: Load linkages and shared palettes
-        const project = new ProjectExtractor(this.inputPath, this.options);
+        const project = new ProjectExtractor(this.inputPath, this.options, this.log);
         await project.init();
 
         // 2. Recursive Extraction: Process all discovered cast libraries
@@ -58,7 +60,8 @@ class DCRExtractor {
             }
         }
 
-
+        // 3. Finalize Project Resources
+        project.savePalettes(outputRoot);
     }
 }
 
