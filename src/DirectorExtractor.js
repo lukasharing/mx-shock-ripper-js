@@ -1,7 +1,7 @@
 /**
- * @version 1.3.5
+ * @version 1.3.6
  * DirectorExtractor - Orchestrates extraction of Director RIFX files.
- * Robust discovery architecture with clean imports.
+ * Robust discovery architecture with regional palette resolution.
  */
 
 const fs = require('fs');
@@ -91,7 +91,6 @@ class DirectorExtractor extends BaseExtractor {
     }
 
     async extract() {
-        console.log(`[DEBUG_EXTRACT] Starting extract for ${this.inputPath}`);
         this.log('INFO', `Starting extraction: ${this.inputPath}`);
 
         this.dirFile = new DirectorFile(null, (lvl, msg) => this.log(lvl, msg));
@@ -107,7 +106,6 @@ class DirectorExtractor extends BaseExtractor {
         await this.metadataManager.parseMCsL();
         await this.metadataManager.parseNameTable();
         await this.metadataManager.parseDRCF();
-        await this.metadataManager.dumpCCL();
         await this.loadSharedPalettes(path.join(path.dirname(this.inputPath), 'shared_palettes.json'));
 
         // [Discovery] Let CastManager aggregate all unique Member IDs

@@ -64,7 +64,7 @@ class MetadataManager {
         const remainingSize = data.length - headerSize;
         const entrySize = totalCount > 0 ? Math.floor(remainingSize / totalCount) : 12;
 
-        this.extractor.log('INFO', `[Metadata] KEY* info: usedCount=${usedCount}, totalCount=${totalCount}, entrySize=${entrySize}, headerSize=${headerSize}`);
+        this.extractor.log('DEBUG', `[Metadata] KEY* info: usedCount=${usedCount}, totalCount=${totalCount}, entrySize=${entrySize}, headerSize=${headerSize}`);
 
         ds.seek(headerSize);
         for (let i = 0; i < usedCount; i++) {
@@ -85,7 +85,7 @@ class MetadataManager {
                 continue;
             }
 
-            this.extractor.log('INFO', `[Metadata] KEY* entry ${i + 1}: tag=${tag}, castID=${castID}, sectionID=${sectionID}`);
+            this.extractor.log('DEBUG', `[Metadata] KEY* entry ${i + 1}: tag=${tag}, castID=${castID}, sectionID=${sectionID}`);
             if (!this.keyTable[castID]) this.keyTable[castID] = {};
             this.keyTable[castID][tag] = sectionID;
             this.resToMember[sectionID] = castID;
@@ -235,15 +235,24 @@ class MetadataManager {
         let targetId = null;
         let source = 'none';
 
-        // 1. Try Cast Order Map (MCsL / CAS*) - Authoritative for slot-based paletteId
-        if (this.extractor.castOrder[paletteId]) {
-            const memberId = this.extractor.castOrder[paletteId];
+        // Director Palette Resolution Logic:
+        // Member logical IDs start at minMember (typically 1 or 4 in Habbo).
+        // paletteId in BITD/CASt refers to a logical member index.
+        // Formula: SlotIndex = paletteId - minMember + 1
+        // This accounts for the "3-slot shift" in US/BR/ES variants (minMember=4)
+        // vs direct mapping in UK variants (minMember=1).
+        const minMember = (this.movieConfig && this.movieConfig.minMember !== undefined) ? this.movieConfig.minMember : 1;
+        const slotIndex = paletteId - minMember + 1;
+
+        // 1. Try Cast Order Map (MCsL / CAS*) - Primary for slot-based paletteId
+        if (slotIndex >= 0 && slotIndex < this.extractor.castOrder.length) {
+            const memberId = this.extractor.castOrder[slotIndex];
             const map = this.keyTable[memberId];
 
             const isPalette = map && (map['CLUT'] || map['clut'] || map['Palt'] || map['palt']);
             if (isPalette) {
                 targetId = memberId;
-                source = 'CastOrder (CLUT)';
+                source = `CastOrder(Slot ${slotIndex}, ID ${memberId})`;
             }
         }
 
@@ -349,62 +358,33 @@ class MetadataManager {
         try {
             const ds = new DataStream(data, 'big');
             const len = ds.readInt16();
-            ds.seek(30); // Offset 30 is defaultPalette.member in D4/D5
+
+            // Offset 12 (int16): minMember - The base logical ID for the first member.
+            // Offset 14 (int16): maxMember - The highest logical ID in the cast.
+            ds.seek(12);
+            const minMember = ds.readInt16();
+            const maxMember = ds.readInt16();
+
+            // Offset 30 (int16): defaultPalette.member - Used for standard movies.
+            // ScummVM logic: If ID <= 0, it refers to a built-in platform palette.
+            ds.seek(30);
             let paletteId = ds.readInt16();
 
-            // ScummVM logic:
-            // if (_defaultPalette.member <= 0) _defaultPalette.member -= 1;
-            // This maps built-in palettes (0 -> -1, -1 -> -2, etc.)
             if (paletteId <= 0) {
                 paletteId -= 1;
             }
 
-            this.extractor.log('INFO', `Movie Config (DRCF): defaultPaletteId=${paletteId}`);
-            this.movieConfig = { defaultPaletteId: paletteId };
+            this.extractor.log('INFO', `Movie Config (DRCF): minMember=${minMember}, maxMember=${maxMember}, defaultPaletteId=${paletteId}`);
+            this.movieConfig = {
+                minMember,
+                maxMember,
+                defaultPaletteId: paletteId
+            };
         } catch (e) {
             this.extractor.log('ERROR', `Failed to parse DRCF: ${e.message}`);
         }
     }
 
-    async dumpCCL() {
-        const ccl = this.extractor.dirFile.chunks.find(c => {
-            const unprot = DirectorFile.unprotect(c.type);
-            return unprot === 'ccl ';
-        });
-        if (!ccl) return;
-
-        const data = await this.extractor.dirFile.getChunkData(ccl);
-        if (!data) return;
-
-        this.extractor.log('DEBUG', `[Metadata] CCL chunk data (hex): ${data.toString('hex').slice(0, 1024)}`);
-        this.extractor.log('DEBUG', `[Metadata] CCL chunk data (string): ${data.toString('ascii').replace(/[^\x20-\x7E]/g, '.')}`);
-    }
-    async dumpMemberCASt(id) {
-        const chunk = this.extractor.dirFile.chunks.find(c => {
-            const unprot = DirectorFile.unprotect(c.type).toUpperCase().trim();
-            return unprot === 'CAST' && (this.resToMember[c.id] === id || c.id === id);
-        });
-        if (!chunk) {
-            // Find CAS* chunk via KEY* table
-            const sectionID = this.keyTable[id] ? (this.keyTable[id]['CAS*'] || this.keyTable[id]['CAsT'] || this.keyTable[id]['CASt']) : null;
-            if (sectionID) {
-                const data = await this.extractor.dirFile.getChunkData(sectionID);
-                if (data) {
-                    this.extractor.log('DEBUG', `[Metadata] Raw CASt data for ID ${id} (hex): ${data.toString('hex').slice(0, 1024)}`);
-                    this.extractor.log('DEBUG', `[Metadata] Raw CASt data for ID ${id} (string): ${data.toString('ascii').replace(/[^\x20-\x7E]/g, '.')}`);
-                    return;
-                }
-            }
-            this.extractor.log('WARNING', `Could not find CASt chunk for ID ${id}`);
-            return;
-        }
-
-        const data = await this.extractor.dirFile.getChunkData(chunk);
-        if (data) {
-            this.extractor.log('DEBUG', `[Metadata] Raw CASt data for ID ${id} (hex): ${data.toString('hex').slice(0, 1024)}`);
-            this.extractor.log('DEBUG', `[Metadata] Raw CASt data for ID ${id} (string): ${data.toString('ascii').replace(/[^\x20-\x7E]/g, '.')}`);
-        }
-    }
 }
 
 module.exports = MetadataManager;

@@ -5,7 +5,7 @@ const { Palette } = require('../utils/Palette');
 const { Color } = require('../utils/Color');
 
 /**
- * @version 1.3.5
+ * @version 1.3.6
  * MemberProcessor.js - Centralized orchestration for member-specific extraction logic.
  * Handles chunk-to-member mapping and delegates to specialized extractors.
  */
@@ -24,7 +24,7 @@ class MemberProcessor {
 
         try {
             if (member.typeId === MemberType.Bitmap) {
-                console.log(`[DEBUG_BITD] Member ${member.name} (ID: ${member.id}) map:`, map);
+                // Bitmap processing logic below
             }
 
             const primaryTag = [

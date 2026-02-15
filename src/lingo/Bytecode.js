@@ -1,5 +1,5 @@
 /**
- * @version 1.3.5
+ * @version 1.3.6
  * Bytecode.js
  * 
  * Translates raw numeric opcodes into human-readable instruction mnemonics.

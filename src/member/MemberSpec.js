@@ -1,5 +1,5 @@
 /**
- * @version 1.3.5
+ * @version 1.3.6
  * MemberSpec.js - Type-specific binary metadata parsers
  */
 

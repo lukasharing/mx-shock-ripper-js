@@ -1,5 +1,5 @@
 /**
- * @version 1.3.5
+ * @version 1.3.6
  * Sound.js - Magic numbers and signatures for audio assets
  */
 
