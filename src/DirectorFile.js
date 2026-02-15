@@ -1,5 +1,5 @@
 /**
- * @version 1.3.6
+ * @version 1.3.7
  * DirectorFile.js - Core logic for parsing .dcr and .cct files.
  */
 
@@ -9,9 +9,19 @@ const DataStream = require('./utils/DataStream');
 const { Magic, AfterburnerTags, Limits } = require('./Constants');
 
 class DirectorFile {
-    constructor(buffer, logger) {
-        this.ds = buffer ? new DataStream(buffer) : null;
-        this.log = logger || ((lvl, msg) => console.log(`[DirectorFile][${lvl}] ${msg}`));
+    constructor(source, logger, length = 0) {
+        if (typeof source === 'number') {
+            this.ds = new DataStream(source, 'big', length);
+            this.fd = source;
+        } else {
+            this.ds = source ? new DataStream(source) : null;
+            this.fd = null;
+        }
+        this.log = logger || ((lvl, msg) => {
+            if (lvl === 'ERROR' || lvl === 'WARN' || lvl === 'WARNING') {
+                console.log(`[DirectorFile][${lvl}] ${msg}`);
+            }
+        });
         this.chunks = [];
         this.cachedViews = {};
         this.isAfterburned = false;
@@ -22,18 +32,17 @@ class DirectorFile {
         this.isLittleEndianFile = false;
     }
 
-    async open(filePath) {
-        if (!fs.existsSync(filePath)) return false;
-        try {
-            const buffer = fs.readFileSync(filePath);
-            this.ds = new DataStream(buffer);
-            await this.parse();
-            return true;
-        } catch (e) {
-            this.log('ERROR', `Failed to open file: ${e.message}`);
-            return false;
+    close() {
+        if (this.fd !== null) {
+            try {
+                fs.closeSync(this.fd);
+                this.fd = null;
+            } catch (e) {
+                this.log('ERROR', `Failed to close file handle: ${e.message}`);
+            }
         }
     }
+
 
     getChunkById(id) {
         let physicalId = id;
@@ -87,7 +96,7 @@ class DirectorFile {
 
         // Standard RIFX search for IMAP/MMAP
         this.ds.seek(12);
-        while (this.ds.position + 12 < this.ds.buffer.length) {
+        while (this.ds.position + 12 < this.ds.length) {
             const tag = this.ds.readFourCC();
             const len = this.ds.readUint32();
 
@@ -140,7 +149,6 @@ class DirectorFile {
             }
 
             if (off > 0) {
-                console.log(`[DirectorFile] Pushing chunk: ${tag} (PID ${i}) at off ${off}`);
                 this.chunks.push({
                     type: tag,
                     len,
@@ -177,10 +185,8 @@ class DirectorFile {
             const tag = ds.readFourCC();
             const len = ds.readUint32();
             const off = ds.readUint32();
-            console.log(`[DirectorFile] ILS Pushing: ${tag} (PID ${i}) at off ${off}`);
             this.chunks.push({ type: tag, len, off, id: i });
         }
-        this.log('INFO', `Loaded ILS with ${this.chunks.length} chunks.`);
     }
 
     async calculateAfterburnedStructure() {
@@ -216,7 +222,6 @@ class DirectorFile {
                     // Looks like swapped 0x0114 or similar
                 } else if (firstWord > 0x1000) {
                     this.ds.endianness = (oldEndian === 'big') ? 'little' : 'big';
-                    this.log('INFO', `Auto-detected endianness mismatch in KEY*. Switched from ${oldEndian} to ${this.ds.endianness}.`);
                 }
             }
         }
@@ -261,7 +266,7 @@ class DirectorFile {
             }
 
             const fcdrDS = new DataStream(rawDecomp, 'big');
-            if (fcdrDS.buffer.length < 2) return;
+            if (fcdrDS.length < 2) return;
             const entryCount = fcdrDS.readUint16();
 
             for (let i = 0; i < entryCount; i++) {
@@ -341,7 +346,7 @@ class DirectorFile {
                 return;
             }
             const ilsDS = new DataStream(decomp, this.ds.endianness);
-            while (ilsDS.position < ilsDS.buffer.length) {
+            while (ilsDS.position < ilsDS.length) {
                 const resId = ilsDS.readVarInt();
                 const chunkInfo = this.chunks.find(c => c.id === resId);
                 if (chunkInfo) {
@@ -349,17 +354,15 @@ class DirectorFile {
                         this.log('WARNING', `Chunk ${resId} too large for ILS: ${chunkInfo.len}`);
                         break;
                     }
-                    if (ilsDS.position + chunkInfo.len > ilsDS.buffer.length) {
+                    if (ilsDS.position + chunkInfo.len > ilsDS.length) {
                         this.log('WARNING', `ILS body overflow at resId ${resId}`);
                         break;
                     }
                     this.cachedViews[resId] = ilsDS.readBytes(chunkInfo.len);
                 } else {
-                    this.log('DEBUG', `Unknown resId ${resId} in ILS directory.`);
                     break;
                 }
             }
-            this.log('INFO', `Loaded ILS with ${Object.keys(this.cachedViews).length} chunks.`);
         } catch (e) {
             this.log('ERROR', `Failed to load Inline Stream: ${e.message}`);
         }

@@ -1,5 +1,5 @@
 /**
- * @version 1.3.6
+ * @version 1.3.7
  * DirectorExtractor - Orchestrates extraction of Director RIFX files.
  * Robust discovery architecture with regional palette resolution.
  */
@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { Worker } = require('worker_threads');
 
 const DirectorFile = require('./DirectorFile');
 const BaseExtractor = require('./extractor/BaseExtractor');
@@ -44,10 +45,11 @@ class DirectorExtractor extends BaseExtractor {
         this.castOrder = [];
         this.projectType = 'standard';
         this.options = options;
+        this.concurrency = options.concurrency || 8;
 
         this.logger = new Logger('DirectorExtractor', (lvl, msg) => {
             this.extractionLog.push({ timestamp: new Date().toISOString(), lvl, msg });
-            if (['INFO', 'SUCCESS', 'ERROR', 'WARN', 'WARNING'].includes(lvl)) {
+            if ((['ERROR', 'WARN', 'WARNING'].includes(lvl)) || (this.options.verbose === true)) {
                 console.log(`[DirectorExtractor][${lvl}] ${msg}`);
             }
         });
@@ -93,9 +95,19 @@ class DirectorExtractor extends BaseExtractor {
     async extract() {
         this.log('INFO', `Starting extraction: ${this.inputPath}`);
 
-        this.dirFile = new DirectorFile(null, (lvl, msg) => this.log(lvl, msg));
-        if (!await this.dirFile.open(this.inputPath)) {
-            this.log('ERROR', `Failed to open file: ${this.inputPath}`);
+        if (!fs.existsSync(this.inputPath)) {
+            this.log('ERROR', `File not found: ${this.inputPath}`);
+            return null;
+        }
+
+        const stats = fs.statSync(this.inputPath);
+        const fd = fs.openSync(this.inputPath, 'r');
+        this.dirFile = new DirectorFile(fd, (lvl, msg) => this.log(lvl, msg), stats.size);
+        try {
+            await this.dirFile.parse();
+        } catch (e) {
+            this.dirFile.close();
+            this.log('ERROR', `Failed to parse Director file: ${e.message}`);
             return null;
         }
 
@@ -125,26 +137,106 @@ class DirectorExtractor extends BaseExtractor {
             if (member.typeId === MemberType.Palette) {
                 const map = this.metadataManager.keyTable[member.id];
                 await this.memberProcessor.processPalette(member, map);
-                if (member.palette) {
-                    this.log('INFO', `[PalettePhase] Attached palette data to Member ${member.id} (${member.name}).`);
+            }
+        }
+
+        // Phase 4: Member Content Processing (Persistent Worker Pool)
+        this.log('INFO', `Processing ${this.members.length} members with persistent Worker Pool (Threads: ${this.concurrency})`);
+
+        const processQueue = this.members.filter(m => {
+            if (m.typeId === MemberType.Palette) return false;
+            // Skip members that have no physical mapping in the keyTable (phantom slots)
+            return !!this.metadataManager.keyTable[m.id];
+        });
+        const workers = [];
+        const taskQueue = [...processQueue];
+        let completedCount = 0;
+
+        // Initialize persistent workers
+        for (let i = 0; i < this.concurrency; i++) {
+            const worker = new Worker(path.join(__dirname, 'extractor', 'ExtractionWorker.js'), {
+                workerData: {
+                    fd: this.dirFile.fd,
+                    keyTable: this.metadataManager.keyTable,
+                    nameTable: this.metadataManager.nameTable,
+                    chunks: this.dirFile.chunks.map(c => ({ id: c.id, offset: this.dirFile.isAfterburned ? (this.dirFile.ilsBodyOffset + c.off) : (c.off + 8), size: c.len })),
+                    options: { verbose: this.options.verbose, lasm: this.options.lasm }
                 }
-            }
+            });
+
+            worker.on('error', (err) => this.log('ERROR', `Worker ${i} error: ${err.message}`));
+            worker.on('exit', (code) => {
+                if (code !== 0 && !this._isStopping) this.log('ERROR', `Worker ${i} stopped with exit code ${code}`);
+            });
+
+            workers.push({ thread: worker, busy: false });
         }
 
-        // Phase 4: Member Content Processing
-        for (const member of this.members) {
-            if (member.typeId === MemberType.Palette) continue;
-            const map = this.metadataManager.keyTable[member.id];
-            if (!map) continue;
+        await new Promise((resolve) => {
+            const distributeTasks = async () => {
+                if (completedCount === processQueue.length) {
+                    resolve();
+                    return;
+                }
 
-            const sectionId = map[Magic.CAST] || map['CAS*'] || map['CAsT'] || map['cast'] ||
-                map[Magic.BITD] || map['ABMP'] || map[Magic.STXT] || Object.values(map)[0];
+                for (const workerObj of workers) {
+                    if (!workerObj.busy && taskQueue.length > 0) {
+                        const member = taskQueue.shift();
+                        workerObj.busy = true;
 
-            const chunk = this.dirFile.getChunkById(sectionId);
-            if (chunk) {
-                await this.memberProcessor.processMemberContent(member, chunk);
-            }
-        }
+                        const outPathPrefix = path.join(this.outputDir, (member.name || `member_${member.id}`).replace(/[/\\?%*:|"<>]/g, '_'));
+                        const finalPalette = await Palette.resolveMemberPalette(member, this);
+
+                        const task = {
+                            member: {
+                                id: member.id,
+                                name: member.name,
+                                typeId: member.typeId,
+                                width: member.width,
+                                height: member.height,
+                                bitDepth: member.bitDepth,
+                                _initialRect: member._initialRect
+                            },
+                            outPathPrefix,
+                            palette: finalPalette
+                        };
+
+                        const onMessage = (msg) => {
+                            if (msg.type === 'log') {
+                                this.log(msg.lvl, msg.msg);
+                            } else if (msg.type === 'result' && msg.memberId === member.id) {
+                                if (msg.result) {
+                                    member.image = msg.result.file || msg.result.path;
+                                    member.format = msg.result.format;
+                                    if (msg.result.width) member.width = msg.result.width;
+                                    if (msg.result.height) member.height = msg.result.height;
+                                }
+                                workerObj.busy = false;
+                                workerObj.thread.off('message', onMessage);
+                                completedCount++;
+                                distributeTasks();
+                            } else if (msg.type === 'error' && msg.memberId === member.id) {
+                                this.log('ERROR', `Worker error for ${member.id}: ${msg.error}`);
+                                workerObj.busy = false;
+                                workerObj.thread.off('message', onMessage);
+                                completedCount++;
+                                distributeTasks();
+                            }
+                        };
+
+                        workerObj.thread.on('message', onMessage);
+                        workerObj.thread.postMessage(task);
+                    }
+                }
+            };
+            distributeTasks();
+        });
+
+        // Terminate persistent workers
+        this._isStopping = true;
+        for (const w of workers) w.thread.terminate();
+
+        this.log('SUCCESS', `Processed ${completedCount}/${processQueue.length} members successfully.`);
 
         // Phase 5: Cleanup & Finalization
         await this.matchDanglingScripts();
@@ -153,6 +245,7 @@ class DirectorExtractor extends BaseExtractor {
         this.saveJSON();
         this.saveLog();
 
+        this.dirFile.close();
         this.log('SUCCESS', `Extraction complete. Extracted ${this.members.length} members. Output: ${this.outputDir}`);
         return { path: this.outputDir, stats: this.stats };
     }
@@ -174,7 +267,6 @@ class DirectorExtractor extends BaseExtractor {
         const lscrChunks = this.dirFile.chunks.filter(c => c.type === Magic.LSCR && !this.metadataManager.resToMember[c.id]);
 
         if (scripts.length > 0 && lscrChunks.length > 0) {
-            this.log('INFO', `Attempting to match ${scripts.length} dangling scripts...`);
             for (let i = 0; i < Math.min(scripts.length, lscrChunks.length); i++) {
                 const data = await this.dirFile.getChunkData(lscrChunks[i]);
                 if (!data) continue;
@@ -210,6 +302,7 @@ class DirectorExtractor extends BaseExtractor {
         for (const castLib of this.castLibs) castLib.checksum = this.getCastLibHash(castLib.index);
         fs.writeFileSync(path.join(this.outputDir, 'castlibs.json'), JSON.stringify({ casts: this.castLibs }, null, 2));
     }
+
 }
 
 module.exports = DirectorExtractor;

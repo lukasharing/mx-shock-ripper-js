@@ -1,145 +1,140 @@
-/**
- * @version 1.3.6
- * DataStream.js - High-performance binary abstraction for Adobe Director assets
- * 
- * Provides a stateful wrapper over Node.js Buffers with support for runtime 
- * endianness switching (crucial for RIFX/XFIR compatibility) and specialized 
- * Director primitives like VarInt and FourCC.
- */
+const fs = require('fs');
 
 class DataStream {
     /**
-     * @param {Buffer} buffer - The underlying data source
+     * @param {Buffer|number} source - Buffer or File Descriptor
      * @param {string} endianness - Initial byte order ('big' or 'little')
+     * @param {number} [length] - Total length (required if source is fd)
      */
-    constructor(buffer, endianness = 'big') {
-        this.buffer = buffer;
+    constructor(source, endianness = 'big', length = 0) {
+        if (typeof source === 'number') {
+            this.fd = source;
+            this.length = length;
+            this.buffer = null;
+        } else {
+            this.buffer = source;
+            this.fd = null;
+            this.length = source ? source.length : 0;
+        }
         this.position = 0;
         this.endianness = endianness;
+        // Small internal buffer for primitive reads when using FD
+        this._ioBuf = Buffer.alloc(8);
     }
 
-    /**
-     * Absolute move of the stream pointer.
-     * @param {number} pos 
-     */
     seek(pos) {
         this.position = pos;
     }
 
-    /**
-     * Relative move of the stream pointer.
-     * @param {number} n 
-     */
     skip(n) {
         this.position += n;
     }
 
     /**
-     * Extracts a sub-buffer without copying.
-     * @param {number} length 
-     * @returns {Buffer}
+     * Extracts a sub-buffer.
      */
     readBytes(length) {
-        if (this.position + length > this.buffer.length) {
-            throw new Error(`Read out of range: pos=${this.position} len=${length} buffer=${this.buffer.length}`);
+        if (this.position + length > this.length) {
+            throw new Error(`Read out of range: pos=${this.position} len=${length} total=${this.length}`);
         }
-        const result = this.buffer.slice(this.position, this.position + length);
+
+        let result;
+        if (this.fd !== null) {
+            result = Buffer.alloc(length);
+            fs.readSync(this.fd, result, 0, length, this.position);
+        } else {
+            result = this.buffer.slice(this.position, this.position + length);
+        }
+
         this.position += length;
         return result;
     }
 
-    /**
-     * Standard integer readers with endianness resolution.
-     */
+    _readIntoBuf(bytes) {
+        if (this.position + bytes > this.length) {
+            throw new Error(`Read out of range at pos ${this.position}`);
+        }
+        if (this.fd !== null) {
+            fs.readSync(this.fd, this._ioBuf, 0, bytes, this.position);
+            this.position += bytes;
+            return this._ioBuf;
+        } else {
+            const buf = this.buffer;
+            const pos = this.position;
+            this.position += bytes;
+            return buf.slice(pos, pos + bytes);
+        }
+    }
+
     readUint8() {
-        if (this.position >= this.buffer.length) {
-            throw new Error(`Read out of range (Uint8) at pos ${this.position} (buffer: ${this.buffer.length})`);
+        if (this.fd !== null) {
+            fs.readSync(this.fd, this._ioBuf, 0, 1, this.position++);
+            return this._ioBuf.readUInt8(0);
         }
         return this.buffer.readUInt8(this.position++);
     }
 
     readInt8() {
-        if (this.position >= this.buffer.length) {
-            throw new Error(`Read out of range (Int8) at pos ${this.position} (buffer: ${this.buffer.length})`);
+        if (this.fd !== null) {
+            fs.readSync(this.fd, this._ioBuf, 0, 1, this.position++);
+            return this._ioBuf.readInt8(0);
         }
         return this.buffer.readInt8(this.position++);
     }
 
     readInt16() {
-        if (this.position + 2 > this.buffer.length) {
-            throw new Error(`Read out of range (Int16) at pos ${this.position}`);
-        }
-        const val = this.endianness === 'little' ? this.buffer.readInt16LE(this.position) : this.buffer.readInt16BE(this.position);
-        this.position += 2;
-        return val;
+        const buf = this._readIntoBuf(2);
+        return this.endianness === 'little' ? buf.readInt16LE(0) : buf.readInt16BE(0);
     }
 
     readUint16() {
-        if (this.position + 2 > this.buffer.length) {
-            throw new Error(`Read out of range (Uint16) at pos ${this.position}`);
-        }
-        const val = this.endianness === 'little' ? this.buffer.readUInt16LE(this.position) : this.buffer.readUInt16BE(this.position);
-        this.position += 2;
-        return val;
+        const buf = this._readIntoBuf(2);
+        return this.endianness === 'little' ? buf.readUInt16LE(0) : buf.readUInt16BE(0);
     }
 
     readInt32() {
-        if (this.position + 4 > this.buffer.length) {
-            throw new Error(`Read out of range (Int32) at pos ${this.position}`);
-        }
-        const val = this.endianness === 'little' ? this.buffer.readInt32LE(this.position) : this.buffer.readInt32BE(this.position);
-        this.position += 4;
-        return val;
+        const buf = this._readIntoBuf(4);
+        return this.endianness === 'little' ? buf.readInt32LE(0) : buf.readInt32BE(0);
     }
 
     readUint32() {
-        if (this.position + 4 > this.buffer.length) {
-            throw new Error(`Read out of range (Uint32) at pos ${this.position}`);
-        }
-        const val = this.endianness === 'little' ? this.buffer.readUInt32LE(this.position) : this.buffer.readUInt32BE(this.position);
-        this.position += 4;
-        return val;
+        const buf = this._readIntoBuf(4);
+        return this.endianness === 'little' ? buf.readUInt32LE(0) : buf.readUInt32BE(0);
     }
 
-    /**
-     * Reads a 4-character code, handling endianness reversal for little-endian files (XFIR).
-     */
     readFourCC() {
-        if (this.position + 4 > this.buffer.length) {
-            throw new Error(`Read out of range (FourCC) at pos ${this.position}`);
-        }
-        let res = this.buffer.toString('ascii', this.position, this.position + 4);
+        const buf = this._readIntoBuf(4);
+        let res = buf.toString('ascii', 0, 4);
         if (this.endianness === 'little') res = res.split('').reverse().join('');
-        this.position += 4;
         return res;
     }
 
     peekFourCC() {
-        if (this.position + 4 > this.buffer.length) return "";
-        let res = this.buffer.toString('ascii', this.position, this.position + 4);
+        if (this.position + 4 > this.length) return "";
+        let res;
+        if (this.fd !== null) {
+            fs.readSync(this.fd, this._ioBuf, 0, 4, this.position);
+            res = this._ioBuf.toString('ascii', 0, 4);
+        } else {
+            res = this.buffer.toString('ascii', this.position, this.position + 4);
+        }
         if (this.endianness === 'little') res = res.split('').reverse().join('');
         return res;
     }
 
-    /**
-     * Reads a Director Variable-Length Integer.
-     */
     readVarInt() {
         let val = 0;
         let b;
         let safety = 0;
         do {
-            if (this.position >= this.buffer.length) break;
+            if (this.position >= this.length) break;
             b = this.readUint8();
             val = (val << 7) | (b & 0x7f);
-            if (++safety > 5) break; // VarInts shouldn't be larger than 32-bit (5 bytes max)
+            if (++safety > 5) break;
         } while (b >> 7);
         return val;
     }
 
-    /**
-     * Reads a standard Director Rectangle (top, left, bottom, right).
-     */
     readRect() {
         return {
             top: this.readInt16(),
@@ -149,9 +144,6 @@ class DataStream {
         };
     }
 
-    /**
-     * Reads a 2D Point (x, y).
-     */
     readPoint() {
         return {
             x: this.readInt16(),
@@ -160,48 +152,21 @@ class DataStream {
     }
 
     readString(length) {
-        if (this.position + length > this.buffer.length) {
-            length = this.buffer.length - this.position;
+        if (this.position + length > this.length) {
+            length = this.length - this.position;
         }
-        const res = this.buffer.toString('utf8', this.position, this.position + length);
-        this.position += length;
-        return res;
+        const buf = this.readBytes(length);
+        return buf.toString('utf8');
     }
 
     readFloat() {
-        if (this.position + 4 > this.buffer.length) {
-            throw new Error(`Read out of range (Float) at pos ${this.position}`);
-        }
-        const val = this.endianness === 'little' ? this.buffer.readFloatLE(this.position) : this.buffer.readFloatBE(this.position);
-        this.position += 4;
-        return val;
+        const buf = this._readIntoBuf(4);
+        return this.endianness === 'little' ? buf.readFloatLE(0) : buf.readFloatBE(0);
     }
 
     readDouble() {
-        if (this.position + 8 > this.buffer.length) {
-            throw new Error(`Read out of range (Double) at pos ${this.position}`);
-        }
-        const val = this.endianness === 'little' ? this.buffer.readDoubleLE(this.position) : this.buffer.readDoubleBE(this.position);
-        this.position += 8;
-        return val;
-    }
-
-    readUint24() {
-        if (this.position + 3 > this.buffer.length) {
-            throw new Error(`Read out of range (Uint24) at pos ${this.position}`);
-        }
-        let result;
-        if (this.endianness === 'little') {
-            result = this.buffer.readUInt8(this.position) |
-                (this.buffer.readUInt8(this.position + 1) << 8) |
-                (this.buffer.readUInt8(this.position + 2) << 16);
-        } else {
-            result = (this.buffer.readUInt8(this.position) << 16) |
-                (this.buffer.readUInt8(this.position + 1) << 8) |
-                this.buffer.readUInt8(this.position + 2);
-        }
-        this.position += 3;
-        return result;
+        const buf = this._readIntoBuf(8);
+        return this.endianness === 'little' ? buf.readDoubleLE(0) : buf.readDoubleBE(0);
     }
 }
 

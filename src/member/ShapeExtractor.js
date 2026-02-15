@@ -1,5 +1,5 @@
 /**
- * @version 1.3.6
+ * @version 1.3.7
  * ShapeExtractor.js - Processing and SVG generation for Director Shape members.
  * 
  * See docs/doc/10_ShapeExtraction.md for technical details.

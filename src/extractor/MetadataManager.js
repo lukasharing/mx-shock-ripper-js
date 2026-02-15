@@ -64,8 +64,6 @@ class MetadataManager {
         const remainingSize = data.length - headerSize;
         const entrySize = totalCount > 0 ? Math.floor(remainingSize / totalCount) : 12;
 
-        this.extractor.log('DEBUG', `[Metadata] KEY* info: usedCount=${usedCount}, totalCount=${totalCount}, entrySize=${entrySize}, headerSize=${headerSize}`);
-
         ds.seek(headerSize);
         for (let i = 0; i < usedCount; i++) {
             if (ds.position + entrySize > data.length) break;
@@ -85,7 +83,6 @@ class MetadataManager {
                 continue;
             }
 
-            this.extractor.log('DEBUG', `[Metadata] KEY* entry ${i + 1}: tag=${tag}, castID=${castID}, sectionID=${sectionID}`);
             if (!this.keyTable[castID]) this.keyTable[castID] = {};
             this.keyTable[castID][tag] = sectionID;
             this.resToMember[sectionID] = castID;
@@ -127,8 +124,6 @@ class MetadataManager {
                     entryCount = ds.readUint32();
                 }
 
-                this.extractor.log('INFO', `Parsing LCTX chunk ${chunk.id} with ${entryCount} entries. Endianness: ${ds.endianness}`);
-
                 ds.readUint32();
                 const entriesOffset = ds.readUint16();
 
@@ -142,9 +137,6 @@ class MetadataManager {
                         ds.readUint16();
 
                         if (sectionId > -1) {
-                            const chunk = this.extractor.dirFile.chunks.find(c => c.id === sectionId);
-                            const chunkType = chunk ? DirectorFile.unprotect(chunk.type) : 'unknown';
-                            this.extractor.log('INFO', `[Metadata] LCTX Map: logicalID=${i} -> physicalID=${sectionId} (Type: ${chunkType})`);
                             this.lctxMap[i] = sectionId;
                         }
                     }
@@ -190,10 +182,7 @@ class MetadataManager {
             // Determine element size. 
             // Standard MCsL is 16-bit. 
             // Afterburner CAS* is often 32-bit physical IDs.
-            const unprotType = DirectorFile.unprotect(mcslChunk.type);
             const use32 = (foundViaTag === 'CAS*' || unprotType === 'CAS*' || unprotType === 'cas*') && (data.length % 4 === 0);
-
-            this.extractor.log('INFO', `Parsing Cast Order (${foundViaTag || unprotType}, Chunk ${mcslChunk.id}) as flat array. Element size: ${use32 ? 32 : 16}-bit`);
 
             this.extractor.castOrder = [];
             let slotIndex = 1;
@@ -208,8 +197,6 @@ class MetadataManager {
                 this.extractor.castOrder[slotIndex] = memberId;
                 slotIndex++;
             }
-
-            this.extractor.log('INFO', `[Metadata] Loaded ${slotIndex - 1} slots from Cast Order.`);
 
         } catch (e) {
             this.extractor.log('ERROR', `Failed to parse MCsL: ${e.message}`);
@@ -236,11 +223,11 @@ class MetadataManager {
         let source = 'none';
 
         // Director Palette Resolution Logic:
-        // Member logical IDs start at minMember (typically 1 or 4 in Habbo).
+        // Member logical IDs start at minMember (typically 1 or 4 in legacy variants).
         // paletteId in BITD/CASt refers to a logical member index.
         // Formula: SlotIndex = paletteId - minMember + 1
-        // This accounts for the "3-slot shift" in US/BR/ES variants (minMember=4)
-        // vs direct mapping in UK variants (minMember=1).
+        // This accounts for the "3-slot shift" in certain variants (minMember=4)
+        // vs direct mapping in others (minMember=1).
         const minMember = (this.movieConfig && this.movieConfig.minMember !== undefined) ? this.movieConfig.minMember : 1;
         const slotIndex = paletteId - minMember + 1;
 
@@ -279,10 +266,6 @@ class MetadataManager {
                 targetId = paletteId;
                 source = 'KeyTable';
             }
-        }
-
-        if (targetId) {
-            this.extractor.log('DEBUG', `[Metadata] Resolved palette ${paletteId} to member ${targetId} via ${source}`);
         }
 
         return targetId;
@@ -331,14 +314,14 @@ class MetadataManager {
         this.extractor.stats.byType[typeName] = (this.extractor.stats.byType[typeName] || 0) + 1;
 
         // Primary lookup: try to find an existing member by the reliable resource-mapped ID first.
-        // Fallback to originalSlotId only if absolutely necessary and valid (> 0).
+        // Fallback to originalSlotId only if valid (> 0), as slots are deterministic identity anchors.
         const targetMember = existingMember ||
             this.extractor.members.find(m => m.id === member.id) ||
             (member.originalSlotId > 0 ? this.extractor.members.find(m => m.id === member.originalSlotId) : null);
 
         if (targetMember) {
-            // TODO: i should investigate here further
-            // Safely merge properties from the newly parsed member into the existing instance
+            // Merging by originalSlotId is safe as it represents the same physical cast slot,
+            // even if referenced via different implicit linkage paths (ILS).
             targetMember.mergeProperties(member);
             return targetMember;
         }
@@ -374,7 +357,6 @@ class MetadataManager {
                 paletteId -= 1;
             }
 
-            this.extractor.log('INFO', `Movie Config (DRCF): minMember=${minMember}, maxMember=${maxMember}, defaultPaletteId=${paletteId}`);
             this.movieConfig = {
                 minMember,
                 maxMember,

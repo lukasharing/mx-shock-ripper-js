@@ -1,5 +1,5 @@
 /**
- * @version 1.3.6
+ * @version 1.3.7
  * LingoDecompiler.js
  * 
  * High-performance Lingo bytecode decompiler using a multi-phase 
@@ -108,6 +108,7 @@ class LingoDecompiler {
                     handler: { locals, args, name: hName, meWasFiltered },
                     literals: literals,
                     isV4: (hLen === LingoConfig.V4_HLEN),
+                    sType,
                     codes, index: 0, memberId,
                     handlers: handlers
                 };
@@ -399,6 +400,58 @@ class LingoDecompiler {
     }
 
     /**
+     * Reconstructs a variable or field reference based on type.
+     */
+    _readVar(stack, varType, resolver, ctx) {
+        let castLib = null;
+        // field cast ID supported from D5.0 (sType high byte often reflects version or specific bit-field)
+        // In this project sType 0x4/0x8/x05 often maps to D5+ styles
+        if (varType === 0x06 && ctx.sType >= 0x05) {
+            castLib = stack.pop();
+        }
+        const idNode = stack.pop();
+        const id = idNode.value;
+
+        switch (varType) {
+            case 0x01: // global
+            case 0x02: // global
+                return new AST.VarReference(resolver(id, "global"));
+            case 0x03: // property/instance
+                return new AST.VarReference(resolver(id, "handle"));
+            case 0x04: // arg
+                return new AST.ParamReference(id.toString());
+            case 0x05: // local
+                return new AST.LocalVarReference(id.toString());
+            case 0x06: // field
+                return new AST.MemberExpression("field", idNode, castLib);
+            default:
+                return new AST.ERROR(`Unhandled var type ${varType}`);
+        }
+    }
+
+    /**
+     * Reconstructs a chunk reference (char, word, item, line) by popping 8 range values.
+     */
+    _readChunkRef(stack, base) {
+        const lastLine = stack.pop();
+        const firstLine = stack.pop();
+        const lastItem = stack.pop();
+        const firstItem = stack.pop();
+        const lastWord = stack.pop();
+        const firstWord = stack.pop();
+        const lastChar = stack.pop();
+        const firstChar = stack.pop();
+
+        let node = base;
+        if (firstLine?.toString() !== "0") node = new AST.ChunkExpression(4, firstLine, lastLine, node);
+        if (firstItem?.toString() !== "0") node = new AST.ChunkExpression(3, firstItem, lastItem, node);
+        if (firstWord?.toString() !== "0") node = new AST.ChunkExpression(2, firstWord, lastWord, node);
+        if (firstChar?.toString() !== "0") node = new AST.ChunkExpression(1, firstChar, lastChar, node);
+
+        return node;
+    }
+
+    /**
      * Phase 4: Translates a single bytecode into AST nodes.
      */
     _translate(bc, ctx) {
@@ -437,7 +490,42 @@ class LingoDecompiler {
             case 'pushfloat32':
                 stack.push(new AST.FloatLiteral(bc.obj)); break;
             case 'pushchunkvarref':
-                stack.push(new AST.VarReference(resolver(bc.obj, "handle"))); break; // TODO: Better chunk ref
+                stack.push(this._readVar(stack, bc.obj, resolver, ctx)); break;
+            case 'getchunk':
+                stack.push(this._readChunkRef(stack, stack.pop())); break;
+            case 'putchunk': {
+                const val = stack.pop();
+                const targetBase = this._readVar(stack, bc.obj & 0x0f, resolver, ctx);
+                const chunk = this._readChunkRef(stack, targetBase);
+                ast.addStatement(new AST.AssignmentStatement(chunk, val));
+                break;
+            }
+            case 'deletechunk': {
+                const targetBase = this._readVar(stack, bc.obj, resolver, ctx);
+                const target = this._readChunkRef(stack, targetBase);
+                ast.addStatement(new AST.CallStatement("delete", target));
+                break;
+            }
+            case 'hilitechunk': {
+                const targetBase = this._readVar(stack, 0x06, resolver, ctx); // hilite defaults to fields
+                const target = this._readChunkRef(stack, targetBase);
+                ast.addStatement(new AST.CallStatement("hilite", target));
+                break;
+            }
+            case 'getfield': {
+                let fCast = null;
+                if (ctx.sType >= 0x05) fCast = stack.pop();
+                const fId = stack.pop();
+                stack.push(new AST.MemberExpression("field", fId, fCast));
+                break;
+            }
+            case 'put': {
+                const val = stack.pop();
+                // bc.obj & 0x0f is the target varType
+                const target = this._readVar(stack, bc.obj & 0x0f, resolver, ctx);
+                ast.addStatement(new AST.AssignmentStatement(target, val));
+                break;
+            }
             case 'getglobal': case 'getglobal2': case 'push_global':
                 stack.push(new AST.VarReference(resolver(bc.obj, "global"))); break;
             case 'getprop': case 'push_prop':

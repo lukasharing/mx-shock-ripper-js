@@ -1,5 +1,5 @@
 /**
- * @version 1.3.6
+ * @version 1.3.7
  * ProjectExtractor.js - Multi-file orchestration & Global Resource Management
  * 
  * Handles the recursive discovery of linked cast libraries (.cct/.cst) and 
@@ -26,7 +26,11 @@ class ProjectExtractor {
         this.entryPath = entryPath;
         this.baseDir = path.dirname(entryPath);
         this.options = options;
-        this.log = logger || ((lvl, msg) => console.log(`[ProjectExtractor][${lvl}] ${msg}`));
+        this.log = logger || ((lvl, msg) => {
+            if (this.options.verbose === true || lvl === 'ERROR' || lvl === 'WARN' || lvl === 'WARNING') {
+                console.log(`[ProjectExtractor][${lvl}] ${msg}`);
+            }
+        });
         this.loadedCasts = [];
         this.globalPalettes = {};
         this.isReady = false;
@@ -135,8 +139,8 @@ class ProjectExtractor {
 
     /**
      * Scans for linked cast files by parsing strings in the MCsL chunk.
-     * TODO: UNCERTAINTY: This uses regex/string heuristics and might miss files with non-standard extensions 
-     * or platform-specific separator logic (Mac COLON vs Win BACKSLASH).
+     * Normalizes platform-specific path separators (Mac COLON vs Win/Posix) 
+     * to ensure robust discovery across different file origins.
      */
     async discoverLinkedCasts(df) {
         const mcsl = df.chunks.find(c => [Magic.MCsL, 'Lscl'].includes(c.type));
@@ -144,6 +148,8 @@ class ProjectExtractor {
 
         const data = await df.getChunkData(mcsl);
         if (!data) return;
+
+        // Extract potential paths, splitting by null/invalid characters
         const rawStrings = data.toString('utf8').replace(/[^\x20-\x7E]/g, '\0').split('\0').filter(s => s.length > 2);
         const castList = [];
 
@@ -151,18 +157,24 @@ class ProjectExtractor {
             const str = raw.trim();
             if (['Internal', 'Primary'].includes(str) || str.toLowerCase().startsWith('empty')) continue;
 
-            let possibleFilename = null;
-            if (str.match(/\.(cst|cct|dcr|dir)$/i)) possibleFilename = path.basename(str);
-            else if (!str.includes(':') && !str.includes('\\') && !str.includes('/')) possibleFilename = str;
+            // Normalize separators: Director on Classic Mac used ":", modern/Win uses "/" or "\"
+            let normalized = str.replace(/:/g, '/').replace(/\\/g, '/');
+            let possibleFilename = path.basename(normalized);
 
             if (possibleFilename) {
                 const base = possibleFilename.replace(/\.(cst|cct|dcr|dir)$/i, '');
+                const extensions = ['.cct', '.cst', '.dcr', '.dir'];
 
                 let targetPath = null;
-                if (fs.existsSync(path.join(this.baseDir, base + '.cct'))) targetPath = path.join(this.baseDir, base + '.cct');
-                else if (fs.existsSync(path.join(this.baseDir, base + '.dcr'))) targetPath = path.join(this.baseDir, base + '.dcr');
+                for (const ext of extensions) {
+                    const candidate = path.join(this.baseDir, base + ext);
+                    if (fs.existsSync(candidate)) {
+                        targetPath = candidate;
+                        break;
+                    }
+                }
 
-                if (targetPath && !castList.includes(base) && !this.loadedCasts.some(c => c.path === targetPath)) {
+                if (targetPath && !this.loadedCasts.some(c => path.resolve(c.path) === path.resolve(targetPath))) {
                     castList.push(base);
                     await this.loadCast(targetPath);
                 }

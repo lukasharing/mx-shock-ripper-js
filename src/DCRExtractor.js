@@ -1,5 +1,5 @@
 /**
- * @version 1.3.6
+ * @version 1.3.7
  * DCRExtractor.js - Full project orchestrator for Adobe Director (.dcr)
  * 
  * Handles multi-file extraction by loading the entry movie and recursively 
@@ -24,7 +24,11 @@ class DCRExtractor {
         this.outputDir = outputDir;
         this.options = options;
         this.baseName = path.parse(inputPath).name;
-        this.log = (lvl, msg) => console.log(`[DCRExtractor][${lvl}] ${msg}`);
+        this.log = (lvl, msg) => {
+            if (this.options.verbose === true || lvl === 'ERROR' || lvl === 'WARN' || lvl === 'WARNING') {
+                console.log(`[DCRExtractor][${lvl}] ${msg}`);
+            }
+        };
     }
 
     /**
@@ -56,7 +60,7 @@ class DCRExtractor {
             try {
                 await extractor.extract();
             } catch (e) {
-                console.error(`[DCRExtractor][ERROR] Segment failure: ${path.basename(cast.path)} - ${e.message}`);
+                this.log('ERROR', `Segment failure: ${path.basename(cast.path)} - ${e.message}`);
             }
         }
 

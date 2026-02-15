@@ -1,5 +1,5 @@
 /**
- * @version 1.3.6
+ * @version 1.3.7
  * GenericExtractor.js - Root class for Director member extraction
  * 
  * Provides standardized file persistence and logging capabilities utilized 
@@ -25,7 +25,6 @@ class GenericExtractor {
         try {
             if (!data) return null;
             fs.writeFileSync(outputPath, data);
-            this.log('INFO', `Extracted ${label}: ${path.basename(outputPath)}`);
             return { file: path.basename(outputPath), size: data.length };
         } catch (e) {
             this.log('ERROR', `Failed to save ${label}: ${e.message}`);

@@ -1,5 +1,5 @@
 /**
- * @version 1.3.6
+ * @version 1.3.7
  * LingoAST.js
  * 
  * Abstract Syntax Tree (AST) nodes used to represent Lingo source code 
@@ -352,6 +352,49 @@ class ExitStatement extends Node {
 }
 
 /**
+ * Reference to a member or field: field(id, castLib) or member(id, castLib)
+ */
+class MemberExpression extends Node {
+    constructor(type, id, castLib = null) {
+        super();
+        this.type = type; // "field", "member", "cast", etc.
+        this.id = id;
+        this.castLib = castLib;
+    }
+
+    toString() {
+        let s = `${this.type} ${this.id.toString()}`;
+        if (this.castLib && this.castLib.toString() !== "0") {
+            s += ` of castLib ${this.castLib.toString()}`;
+        }
+        return s;
+    }
+}
+
+/**
+ * Lingo chunk: char 1 to 5 of ...
+ */
+class ChunkExpression extends Node {
+    constructor(type, start, end, base) {
+        super();
+        this.type = type; // 1: char, 2: word, 3: item, 4: line
+        this.start = start;
+        this.end = end;
+        this.base = base;
+    }
+
+    toString() {
+        const types = { 1: "char", 2: "word", 3: "item", 4: "line" };
+        const typeStr = types[this.type] || "chunk";
+        let range = this.start.toString();
+        if (this.end.toString() !== range) {
+            range += ` to ${this.end.toString()}`;
+        }
+        return `${typeStr} ${range} of ${this.base.toString()}`;
+    }
+}
+
+/**
  * Placeholder for failed decompilation segments
  */
 class ERROR extends Node {
@@ -366,5 +409,5 @@ module.exports = {
     CallStatement, ObjCallStatement, BinaryOperator, LogicalOperator,
     NotOperator, InverseOperator, IfStatement, CaseStatement, CaseBranch,
     RepeatWithStatement, RepeatWhileStatement,
-    ReturnStatement, ExitStatement, ERROR
+    ReturnStatement, ExitStatement, MemberExpression, ChunkExpression, ERROR
 };

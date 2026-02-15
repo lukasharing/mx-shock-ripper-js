@@ -40,7 +40,7 @@ class BaseExtractor {
         if (!this.outputDir || !this.metadata) return;
         const outPath = path.join(this.outputDir, "members.json");
         fs.writeFileSync(outPath, JSON.stringify(this.metadata, null, 2));
-        this.log('SUCCESS', `Saved metadata to ${outPath}`);
+        fs.writeFileSync(outPath, JSON.stringify(this.metadata, null, 2));
     }
 
     saveLog() {

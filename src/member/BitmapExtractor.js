@@ -25,7 +25,7 @@ class BitmapExtractor extends BaseExtractor {
         if (!bitmapBuf || bitmapBuf.length === 0) return null;
 
         // 1. Geometry sets
-        // Prioritize SPEC dimensions over Cast metadata dimensions for Habbo
+        // Prioritize SPEC dimensions over Cast metadata dimensions for legacy assets
         const dimSets = [];
         if (member._initialRect) {
             const r = member._initialRect;
@@ -55,7 +55,6 @@ class BitmapExtractor extends BaseExtractor {
         const orderedDepths = [declaredDepth, ...depths.filter(d => d !== declaredDepth)];
         const alignments = [1, 2, 4, 8, 16, 32, 64, 128];
 
-        this.log('DEBUG', `[BitmapExtractor] ${member.name}: Starting robust trials. Compression=${member._compression}, DeclaredDepth=${declaredDepth}`);
 
         // 3. Robust Trial Loop
         // We prioritize the DECLARED depth as the outermost loop.
@@ -70,7 +69,6 @@ class BitmapExtractor extends BaseExtractor {
                     for (const align of alignments) {
                         const rb = Math.ceil(baseRowBytes / align) * align;
                         if (rb * dims.h === actualLen) {
-                            this.log('SUCCESS', `[${method.name}] Match for ${member.name}: ${dims.w}x${dims.h}@${d} [${dims.source}], rowBytes=${rb}`);
                             return this._doExtract(method.data, dims.w, dims.h, d, rb, member, customPalette, alphaBuf, outputPath);
                         }
                     }
@@ -78,11 +76,12 @@ class BitmapExtractor extends BaseExtractor {
             }
         }
 
-        // 4. Special Case: Row-Based PackBits (Habbo legacy)
+        // 4. Special Case: Row-Based PackBits (Legacy variants)
         // We also prioritize the declared depth here
         for (const d of orderedDepths) {
             for (const dims of dimSets) {
                 const baseRowBytes = Math.ceil(dims.w * d / 8);
+                const alignments = [1, 2, 4, 8, 16];
                 for (const align of alignments) {
                     const rb = Math.ceil(baseRowBytes / align) * align;
                     // Try Row-Based PackBits on raw and zlib decompressed
@@ -92,7 +91,6 @@ class BitmapExtractor extends BaseExtractor {
                     for (const src of rowSources) {
                         const rowResult = this.decompressPackBitsRows(src.data, rb, dims.h);
                         if (rowResult && rowResult.actualLen > 0 && rowResult.data.length === rb * dims.h) {
-                            this.log('SUCCESS', `[${src.name}] Match for ${member.name}: ${dims.w}x${dims.h}@${d} [${dims.source}], rowBytes=${rb}`);
                             return this._doExtract(rowResult.data, dims.w, dims.h, d, rb, member, customPalette, alphaBuf, outputPath);
                         }
                     }
@@ -100,6 +98,7 @@ class BitmapExtractor extends BaseExtractor {
             }
         }
 
+        // Exhaustive fallback: try rare padding alignments or offset trials if standard ones fail.
         this.log('ERROR', `No matching configuration found for ${member.name}. Tried all prioritized decompression/geometry combinations.`);
         return null;
     }
@@ -114,7 +113,7 @@ class BitmapExtractor extends BaseExtractor {
 
         let orders = ['DEFAULT'];
         if (depth === 32) {
-            // ROW_PLANAR_ARGB has been verified as correct for Habbo 32-bit assets
+            // ROW_PLANAR_ARGB has been verified as correct for legacy 32-bit assets
             orders = ['ROW_PLANAR_ARGB'];
         }
 

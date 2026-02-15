@@ -543,21 +543,19 @@ class Palette {
                     const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
                     if (pal) {
                         member.palette = { id: target.id, name: target.name, castlib: 'internal', traced: true, resolution: (resolvedId ? 'ils' : 'direct') };
-                        extractor.log('SUCCESS', `[Palette] Traced ${member.name} -> ${target.name} (${resolvedId ? 'ILS' : 'Direct'})`);
                         return pal;
                     }
                 } else if (target.typeId === 1 || target.type === 'Bitmap') {
                     const borrowedPal = await this.tracePaletteChain(target, extractor, platform, visited);
                     if (borrowedPal) {
                         member.palette = Object.assign({}, target.palette, { traced: true, borrowedFrom: target.name });
-                        extractor.log('SUCCESS', `[Palette] Traced ${member.name} -> ${target.name} (Borrowed)`);
                         return borrowedPal;
                     }
                 }
             }
         }
 
-        // 4. Legacy Cast Slot Lookup (The "Tower Fix")
+        // 4. Legacy Cast Slot Mapping (General Heuristic)
         // If linkId is a positive integer (e.g. 8) and wasn't found as a direct Member ID,
         // it likely refers to a Cast Slot Index (MCsL or Implicit Key Order).
         if (linkId > 0 && extractor) {
@@ -593,7 +591,6 @@ class Palette {
                         const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
                         if (pal) {
                             member.palette = { id: target.id, name: target.name, castlib: 'internal', traced: true, resolution: 'slot-lookup' };
-                            extractor.log('SUCCESS', `[Palette] Traced ${member.name} (Ref:${linkId}) -> Slot ${linkId} -> Val ${slotValue} -> ${target.name} (ID:${target.id})`);
                             return pal;
                         }
                     }
@@ -610,14 +607,12 @@ class Palette {
                     const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
                     if (pal) {
                         member.palette = { id: externalMember.id, name: externalMember.name, castlib: externalMember.castlibName, traced: true, resolution: 'cross-cast' };
-                        extractor.log('SUCCESS', `[Palette] Traced ${member.name} -> ${externalMember.name} (Cross-Cast)`);
                         return pal;
                     }
                 } else if (externalMember.typeId === 1 || externalMember.type === 'Bitmap') {
                     const borrowedPal = await this.tracePaletteChain(externalMember, extractor, platform, visited);
                     if (borrowedPal) {
                         member.palette = Object.assign({}, externalMember.palette, { traced: true, borrowedFrom: externalMember.name });
-                        extractor.log('SUCCESS', `[Palette] Traced ${member.name} -> ${externalMember.name} (Cross-Cast Borrowed)`);
                         return borrowedPal;
                     }
                 }
@@ -684,7 +679,6 @@ class Palette {
         // 1-bit images in Director are strictly Black/White (Mac System).
         // They should ignore any assigned palette ID.
         if (member.bitDepth === 1) {
-            extractor?.log?.('INFO', `[Palette] 1-bit override for ${name}: Using Mac System (B/W)`);
             return PALETTES.MAC;
         }
 
@@ -701,7 +695,6 @@ class Palette {
         // If paletteId is 0, we should use the movie's default palette from DRCF
         if ((logicalPaletteId === 0 || logicalPaletteId === -1) && extractor?.metadataManager?.movieConfig?.defaultPaletteId) {
             logicalPaletteId = extractor.metadataManager.movieConfig.defaultPaletteId;
-            extractor?.log?.('DEBUG', `[Palette] Using movie default palette: ${logicalPaletteId}`);
         }
 
         // --- FUNDAMENTAL 2: Trace Reference Chains ---
