@@ -29,5 +29,14 @@ module.exports = {
     'muhT': 'Thum', // Thumbnail (Shockwave)
     'STG ': 'Grid', // Grid (Shockwave)
     'CDGF': 'FGDC', // Reversed FGDC (Little Endian)
-    'MDGF': 'FGDM'  // Reversed FGDM (Little Endian)
+    'MDGF': 'FGDM', // Reversed FGDM (Little Endian)
+    'abmc': 'MCsL', // Afterburner MCsL
+    'cas*': 'CASt', // Lowercase Protected CASt
+    'clut': 'CLUT',
+    'Palt': 'CLUT',
+    'palt': 'CLUT',
+    'PALT': 'CLUT',
+    'bitd': 'BITD',
+    'stxt': 'STXT',
+    'TXTS': 'STXT'
 };

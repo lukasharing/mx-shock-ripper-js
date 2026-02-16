@@ -1,5 +1,7 @@
 const path = require('path');
 const fs = require('fs');
+const DataStream = require('../utils/DataStream');
+const { Resources } = require('../Constants');
 
 class BaseExtractor {
     constructor(logger) {
@@ -8,11 +10,10 @@ class BaseExtractor {
     }
 
     getStream(buffer, endianness = 'big') {
-        const DataStream = require('../utils/DataStream');
         return new DataStream(buffer, endianness);
     }
 
-    saveFile(buffer, outputPath, type = "generic") {
+    saveFile(buffer, outputPath, type = Resources.Labels.Generic) {
         try {
             const dir = path.dirname(outputPath);
             if (!fs.existsSync(dir)) {
@@ -38,8 +39,7 @@ class BaseExtractor {
 
     saveJSON() {
         if (!this.outputDir || !this.metadata) return;
-        const outPath = path.join(this.outputDir, "members.json");
-        fs.writeFileSync(outPath, JSON.stringify(this.metadata, null, 2));
+        const outPath = path.join(this.outputDir, `members.${Resources.Formats.JSON}`);
         fs.writeFileSync(outPath, JSON.stringify(this.metadata, null, 2));
     }
 

@@ -74,8 +74,8 @@ class DirectorFile {
         // Handle Afterburner variants:
         // FGDC (CCT), FGDM (DCR)
         // CDGF (byte-swapped FGDC), MDGF (byte-swapped FGDM)
-        const isAfterburner = [Magic.FGDC, Magic.FGDM, 'CDGF', 'MDGF'].includes(magic) ||
-            [Magic.FGDC, Magic.FGDM, 'CDGF', 'MDGF'].includes(internalMagic);
+        const isAfterburner = [Magic.FGDC, Magic.FGDM, Magic.CDGF, Magic.MDGF].includes(magic) ||
+            [Magic.FGDC, Magic.FGDM, Magic.CDGF, Magic.MDGF].includes(internalMagic);
 
         if (isAfterburner) {
             this.isAfterburned = true;
@@ -100,11 +100,11 @@ class DirectorFile {
             const tag = this.ds.readFourCC();
             const len = this.ds.readUint32();
 
-            if (tag === Magic.IMAP || tag === Magic.imap || tag === 'pami') {
+            if (tag === Magic.IMAP || tag === Magic.imap || tag === Magic.pami) {
                 this.ds.skip(4);
                 mmapOff = (this.ds.endianness === 'little') ? this.ds.buffer.readUInt32LE(this.ds.position) : this.ds.buffer.readUInt32BE(this.ds.position);
                 break;
-            } else if (tag === Magic.MMAP || tag === Magic.mmap || tag === 'pamm') {
+            } else if (tag === Magic.MMAP || tag === Magic.mmap || tag === Magic.pamm) {
                 mmapOff = this.ds.position - 8;
                 break;
             }
@@ -115,7 +115,7 @@ class DirectorFile {
             // Check for ILS directly (protected casts often have this)
             this.ds.seek(8);
             const tag = this.ds.readFourCC();
-            if (tag === Magic.ILS || tag === 'ILS ' || tag === ' ,i') {
+            if (tag === Magic.ILS || tag === Magic.ILS_REV) {
                 await this._parseILS();
                 return;
             }
@@ -209,7 +209,7 @@ class DirectorFile {
         if (this.isLittleEndianFile) return;
 
         // Heuristic: Check KEY* chunk for sanity
-        const checkChunk = this.chunks.find(c => DirectorFile.unprotect(c.type) === 'KEY*');
+        const checkChunk = this.chunks.find(c => DirectorFile.unprotect(c.type) === Magic.KEY);
 
         if (checkChunk) {
             const data = await this.getChunkData(checkChunk);
@@ -284,7 +284,7 @@ class DirectorFile {
 
     async _parseAbmp() {
         const tag = DirectorFile.unprotect(this.ds.peekFourCC());
-        if ([Magic.ABMP, Magic.PMBA].includes(tag) || tag.toUpperCase() === 'ABMP') {
+        if ([Magic.ABMP, Magic.PMBA].includes(tag) || tag.toUpperCase() === Magic.ABMP.toUpperCase()) {
             this.ds.readFourCC(); // Read the tag
             const abmpLen = this.ds.readVarInt();
             const abmpDataEnd = this.ds.position + abmpLen;
@@ -390,11 +390,16 @@ class DirectorFile {
                     try {
                         data = zlib.inflateRawSync(raw);
                     } catch (e2) {
-                        if (raw.length > 4) {
-                            try { data = zlib.inflateRawSync(raw.slice(4)); } catch (e) { data = raw; }
-                        } else {
-                            data = raw;
+                        // Fallback: If both fail, try scanning for Zlib header (0x78)
+                        for (let i = 0; i < Math.min(raw.length, 128); i++) {
+                            if (raw[i] === 0x78 && (raw[i + 1] === 0x01 || raw[i + 1] === 0x9C || raw[i + 1] === 0xDA)) {
+                                try {
+                                    data = zlib.inflateSync(raw.slice(i));
+                                    break;
+                                } catch (inner) { }
+                            }
                         }
+                        if (!data) data = raw;
                     }
                 }
             } else {

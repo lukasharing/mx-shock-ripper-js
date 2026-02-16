@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.8
  * MovieExtractor.js - Extraction logic for Movie and FilmLoop members
  * 
  * Handles parsing of internal Score data for FilmLoops (Type 2).
@@ -8,6 +8,7 @@
 
 const GenericExtractor = require('./GenericExtractor');
 const DataStream = require('../utils/DataStream');
+const { Resources } = require('../Constants');
 
 class MovieExtractor extends GenericExtractor {
     constructor(log) {
@@ -137,12 +138,13 @@ class MovieExtractor extends GenericExtractor {
         // Save JSON representation
         const json = this.extract(buffer, member);
         if (json) {
-            const res = this.saveFile(Buffer.from(json, 'utf8'), outputPath + '.filmloop.json', "FilmLoop (JSON)");
+            const finalPath = outputPath + '.filmloop.' + Resources.Formats.JSON;
+            const res = this.saveFile(Buffer.from(json, 'utf8'), finalPath, "FilmLoop (JSON)");
             if (res) {
                 return {
                     file: res.file,
                     size: res.size,
-                    format: 'json'
+                    format: Resources.Formats.JSON
                 };
             }
         }

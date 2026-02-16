@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.8
  * SoundExtractor.js - Handles extraction and conversion of Director 
  * sound (SND) assets. Supports SWA, MP3, and standard PCM.
  */
@@ -23,18 +23,18 @@ class SoundExtractor extends GenericExtractor {
         let ext = FileExtensions.Sound;
 
         // 1. MP3 / SWA (Shockwave Audio)
-        if (meta.format === 'mp3' || meta.format === 'swa') {
+        if (meta.format === Resources.Formats.MP3 || meta.format === Resources.Formats.SWA) {
             finalData = this.stripSWAHeader(buffer, meta.offset);
-            ext = FileExtensions.MP3;
+            ext = Resources.FileExtensions.MP3;
         }
         // 2. IMA ADPCM (QuickTime / Apple IMA4)
-        else if (meta.format === 'ima4') {
+        else if (meta.format === Resources.Formats.IMA4) {
             // Drop back to .ima4 for now as it's the raw compressed chunk
             if (meta.offset > 0) finalData = buffer.slice(meta.offset);
-            ext = '.ima4';
+            ext = '.' + Resources.Formats.IMA4;
         }
         // 3. Standard PCM (Mac 'raw ' or 'twos')
-        else if (meta.format === 'raw' || meta.format === 'twos' || meta.sampleRate > 0) {
+        else if (meta.format === Resources.Formats.RAW || meta.format === Resources.Formats.TWOS || meta.sampleRate > 0) {
             if (meta.offset > 0) {
                 const rawData = buffer.slice(meta.offset);
                 const sampleSize = meta.sampleSize || 8;
@@ -75,13 +75,13 @@ class SoundExtractor extends GenericExtractor {
 
         // Check for SWA / MP3 Signature
         const firstUint = ds.readUint32();
-        if (firstUint === signatures.SWA_MAGIC || buffer.slice(0, 4).toString() === 'PTVw') {
-            return { format: 'swa', offset: 0 }; // Offset calculated later
+        if (firstUint === signatures.SWA_MAGIC || buffer.slice(0, 4).toString() === SoundSignatures.SignaturesExtra.PTVW) {
+            return { format: Resources.Formats.SWA, offset: 0 }; // Offset calculated later
         }
 
         // Check for RIFF (WAV)
         if (buffer.slice(0, 4).toString() === signatures.RIFF) {
-            return { format: 'wav', offset: 0 };
+            return { format: Resources.Formats.WAV, offset: 0 };
         }
 
         // Parse Director 'snd ' Resource
@@ -93,7 +93,7 @@ class SoundExtractor extends GenericExtractor {
      * Parses Macintosh 'snd ' resource structure.
      */
     parseDirectorSnd(ds) {
-        const meta = { format: 'unknown', offset: 0, sampleRate: 0, numChannels: 1, sampleSize: 8 };
+        const meta = { format: Resources.Formats.UNKNOWN, offset: 0, sampleRate: 0, numChannels: 1, sampleSize: 8 };
 
         try {
             const format = ds.readUint16(); // Format 1 or 2
@@ -106,10 +106,10 @@ class SoundExtractor extends GenericExtractor {
                 for (let i = 0; i < dataTypeCount; i++) {
                     const dataFormatID = ds.readUint32();
                     ds.readUint32(); // initOption
-                    if (dataFormatID === SoundCodecs.IMA4) meta.format = 'ima4';
-                    else if (dataFormatID === SoundCodecs.TWOS) meta.format = 'twos';
-                    else if (dataFormatID === SoundCodecs.RAW) meta.format = 'raw';
-                    else if (dataFormatID === SoundCodecs.MAC3 || dataFormatID === SoundCodecs.MAC6) meta.format = 'mace';
+                    if (dataFormatID === SoundCodecs.IMA4) meta.format = Resources.Formats.IMA4;
+                    else if (dataFormatID === SoundCodecs.TWOS) meta.format = Resources.Formats.TWOS;
+                    else if (dataFormatID === SoundCodecs.RAW) meta.format = Resources.Formats.RAW;
+                    else if (dataFormatID === SoundCodecs.MAC3 || dataFormatID === SoundCodecs.MAC6) meta.format = Resources.Formats.MACE;
                 }
             } else if (format === 2) {
                 ds.readUint16(); // refCount
@@ -162,7 +162,7 @@ class SoundExtractor extends GenericExtractor {
                         if (meta.format === 'unknown') {
                             const sync = this.findMP3Sync(ds.buffer.slice(ds.position, ds.position + 128));
                             if (sync !== -1) {
-                                meta.format = 'mp3';
+                                meta.format = Resources.Formats.MP3;
                                 meta.offset = ds.position + sync;
                             } else {
                                 // Fallback: If no sync found, but it was a valid extended header, 
@@ -184,13 +184,13 @@ class SoundExtractor extends GenericExtractor {
                 }
 
                 // General MP3 scan fallback if still unknown (for safety)
-                if (meta.format === 'unknown' || meta.format === 'ima4') {
+                if (meta.format === Resources.Formats.UNKNOWN || meta.format === Resources.Formats.IMA4) {
                     const currentPos = (meta.offset > 0) ? meta.offset : ds.position;
                     // Only scan if we have enough data left
                     if (currentPos < ds.byteLength) {
                         const sync = this.findMP3Sync(ds.buffer.slice(currentPos, currentPos + 128));
                         if (sync !== -1) {
-                            meta.format = 'mp3';
+                            meta.format = Resources.Formats.MP3;
                             meta.offset = currentPos + sync;
                         }
                     }
@@ -234,7 +234,7 @@ class SoundExtractor extends GenericExtractor {
         header.write(SoundSignatures.RIFF, 0);
         header.writeUInt32LE(36 + dataSize, 4);
         header.write(SoundSignatures.WAVE, 8);
-        header.write('fmt ', 12);
+        header.write(SoundSignatures.SignaturesExtra.FMT, 12);
         header.writeUInt32LE(16, 16);
         header.writeUInt16LE(1, 20); // PCM
         header.writeUInt16LE(numChannels, 22);
@@ -244,7 +244,7 @@ class SoundExtractor extends GenericExtractor {
         header.writeUInt32LE(byteRate, 28);
         header.writeUInt16LE(blockAlign, 32);
         header.writeUInt16LE(sampleSize, 34);
-        header.write('data', 36);
+        header.write(SoundSignatures.SignaturesExtra.DATA, 36);
         header.writeUInt32LE(dataSize, 40);
         return header;
     }

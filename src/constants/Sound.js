@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.8
  * Sound.js - Magic numbers and signatures for audio assets
  */
 
@@ -18,6 +18,12 @@ module.exports = {
         RAW: 0x72617720,  // 'raw '
         TWOS: 0x74776F73, // 'twos'
         IMA4: 0x696D6134, // 'ima4'
-        SWA: 'SWA'
+        SWA: 'SWA',
+        MP3: 'mp3'
+    },
+    SignaturesExtra: {
+        PTVW: 'PTVw',
+        FMT: 'fmt ',
+        DATA: 'data'
     }
 };

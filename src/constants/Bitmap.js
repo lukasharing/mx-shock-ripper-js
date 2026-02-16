@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.8
  * Bitmap.js - Attribute flags and masks for Director Bitmap members
  */
 
@@ -17,6 +17,15 @@ module.exports = {
     Alpha: {
         Opaque: 255,
         Transparent: 0
+    },
+    ChannelOrder: {
+        DEFAULT: 'DEFAULT',
+        ARGB: 'ARGB',
+        RGBA: 'RGBA',
+        BGRA: 'BGRA',
+        ROW_PLANAR_ARGB: 'ROW_PLANAR_ARGB',
+        ROW_PLANAR: 'ROW_PLANAR_',
+        PLANAR: 'PLANAR_'
     },
     BitmapTags: ['BITD', 'bitd', 'DIB ', 'DIB*', 'Abmp', 'PMBA']
 };

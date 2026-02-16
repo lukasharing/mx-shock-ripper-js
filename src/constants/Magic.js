@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.8
  * Magic.js - FourCC identifiers and Magic numbers for Director chunks
  */
 
@@ -20,6 +20,7 @@ module.exports = {
     BITD: 'BITD', // Bitmap Data
     SND: 'SND ',  // Sound (Stereo/Mono PCM)
     snd: 'snd ',  // Sound (Platform-specific lowercase)
+    SND_STAR: 'SND*', // Sound Variant
     STXT: 'STXT', // Script Text (Lingo source)
     TEXT: 'TEXT', // Text Member Content
     ALFA: 'ALFA', // Alpha Mask
@@ -52,6 +53,31 @@ module.exports = {
     // Internal Map Tags
     imap: 'imap',
     mmap: 'mmap',
+    pami: 'pami',
+    pamm: 'pamm',
+    // Additional Variants from Audit
+    CAS_STAR: 'CAS*',
+    cas_star: 'cas*',
+    CArT: 'CArT',
+    CAsT: 'CAsT',
+    cast_lower: 'cast',
+    CLUT_UPPER: 'CLUT',
+    clut_lower: 'clut',
+    Palt: 'Palt',
+    palt_lower: 'palt',
+    PALT_UPPER: 'PALT',
+    medi: 'medi',
+    ediM: 'ediM',
+    bitd_lower: 'bitd',
+    stxt_lower: 'stxt',
+    abmc: 'abmc',
+    manL: 'manL',
+    XTCL: 'XTCL',
+    LCTX_UPPER: 'LCTX',
+    PIXL: 'PIXL',
+    rcsL: 'rcsL',
+    ILS: 'ILS ',
+    ILS_REV: ' ,i',
     // Afterburner Inline
     IEGF: 'IEGF',
     // Junk/Free

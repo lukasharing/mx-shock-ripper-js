@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.8
  * GenericExtractor.js - Root class for Director member extraction
  * 
  * Provides standardized file persistence and logging capabilities utilized 
@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { Resources } = require('../Constants');
 
 class GenericExtractor {
     /**
@@ -21,7 +22,7 @@ class GenericExtractor {
      * Persists binary data to the filesystem and logs the operation.
      * @returns {object|null} Metadata about the saved file.
      */
-    saveFile(data, outputPath, label = "Asset") {
+    saveFile(data, outputPath, label = Resources.Labels.Generic) {
         try {
             if (!data) return null;
             fs.writeFileSync(outputPath, data);
@@ -36,7 +37,7 @@ class GenericExtractor {
      * Fallback save method for raw chunk persistence.
      */
     save(buffer, outputPath) {
-        return this.saveFile(buffer, outputPath, "RawData");
+        return this.saveFile(buffer, outputPath, Resources.Labels.Generic);
     }
 }
 

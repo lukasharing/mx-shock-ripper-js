@@ -4,6 +4,7 @@ const fs = require('fs');
 const BaseExtractor = require('../extractor/BaseExtractor');
 const DataStream = require('../utils/DataStream');
 const { Bitmap, MemberType, HeaderSize } = require('../Constants');
+const { Palette } = require('../utils/Palette');
 
 const BitDepth = {
     Depth1: 1,
@@ -107,14 +108,13 @@ class BitmapExtractor extends BaseExtractor {
     async _doExtract(data, width, height, depth, rowBytes, member, customPalette, alphaBuf, outputPath) {
         if (!data || data.length === 0) return null;
 
-        const { Palette } = require('../utils/Palette');
         const palette = customPalette || this.internalPalette || await Palette.resolveMemberPalette(member, this.extractor) ||
             (depth === 1 ? [[255, 255, 255], [0, 0, 0]] : null);
 
-        let orders = ['DEFAULT'];
+        let orders = [Bitmap.ChannelOrder.DEFAULT];
         if (depth === 32) {
             // ROW_PLANAR_ARGB has been verified as correct for legacy 32-bit assets
-            orders = ['ROW_PLANAR_ARGB'];
+            orders = [Bitmap.ChannelOrder.ROW_PLANAR_ARGB];
         }
 
         for (const order of orders) {
@@ -125,7 +125,7 @@ class BitmapExtractor extends BaseExtractor {
                 const imgData = PNG.sync.write(dst);
 
                 if (outputPath) {
-                    return await this.saveFile(imgData, outputPath, "bitmap");
+                    return await this.saveFile(imgData, outputPath, Resources.Labels.Bitmap);
                 }
                 return imgData;
             } catch (e) {
@@ -158,8 +158,8 @@ class BitmapExtractor extends BaseExtractor {
             for (let i = 0; i < 256; i++) palette.push([i, i, i]);
         }
 
-        if (depth === 32 && channelOrder.startsWith('ROW_PLANAR_')) {
-            const layout = channelOrder.replace('ROW_PLANAR_', '');
+        if (depth === 32 && channelOrder.startsWith(Bitmap.ChannelOrder.ROW_PLANAR)) {
+            const layout = channelOrder.replace(Bitmap.ChannelOrder.ROW_PLANAR, '');
             for (let y = 0; y < height; y++) {
                 const rowBase = y * rowBytes;
                 const planeWidth = Math.floor(rowBytes / 4);
@@ -178,8 +178,8 @@ class BitmapExtractor extends BaseExtractor {
             return dst;
         }
 
-        if (depth === 32 && channelOrder.startsWith('PLANAR_')) {
-            const layout = channelOrder.replace('PLANAR_', '');
+        if (depth === 32 && channelOrder.startsWith(Bitmap.ChannelOrder.PLANAR)) {
+            const layout = channelOrder.replace(Bitmap.ChannelOrder.PLANAR, '');
             const planeSize = width * height;
             for (let i = 0; i < planeSize; i++) {
                 const dstIdx = i * 4;
@@ -225,9 +225,9 @@ class BitmapExtractor extends BaseExtractor {
                     const idx = rowStart + x * 4;
                     if (idx + 3 < pixelData.length) {
                         const b1 = pixelData[idx], b2 = pixelData[idx + 1], b3 = pixelData[idx + 2], b4 = pixelData[idx + 3];
-                        if (channelOrder === 'ARGB') { a = b1; r = b2; g = b3; b = b4; }
-                        else if (channelOrder === 'RGBA') { r = b1; g = b2; b = b3; a = b4; }
-                        else if (channelOrder === 'BGRA') { b = b1; g = b2; r = b3; a = b4; }
+                        if (channelOrder === Bitmap.ChannelOrder.ARGB) { a = b1; r = b2; g = b3; b = b4; }
+                        else if (channelOrder === Bitmap.ChannelOrder.RGBA) { r = b1; g = b2; b = b3; a = b4; }
+                        else if (channelOrder === Bitmap.ChannelOrder.BGRA) { b = b1; g = b2; r = b3; a = b4; }
                     }
                 } else if (depth === 16) {
                     const idx = rowStart + x * 2;

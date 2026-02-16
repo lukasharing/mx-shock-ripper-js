@@ -17,7 +17,7 @@ class MetadataManager {
     async parseKeyTable() {
         const keyChunk = this.extractor.dirFile.chunks.find(c => {
             const unprot = DirectorFile.unprotect(c.type).toUpperCase();
-            return unprot === 'KEY*' || unprot === 'KEY ';
+            return unprot === Magic.KEY.toUpperCase() || unprot === Magic.KEY_SPACE.trim().toUpperCase();
         });
         if (!keyChunk) return;
 
@@ -98,7 +98,7 @@ class MetadataManager {
         const lctxChunks = this.extractor.dirFile.chunks.filter(c => {
             const rawType = c.type;
             const unprot = DirectorFile.unprotect(rawType).toUpperCase().trim();
-            if (unprot.includes('LCTX') || unprot.includes('XTCL')) return true;
+            if (unprot.includes(Magic.LCTX_UPPER) || unprot.includes(Magic.XTCL)) return true;
             return false;
         });
         for (const chunk of lctxChunks) {
@@ -151,7 +151,7 @@ class MetadataManager {
         // Priority 1: Generic MCsL/abmc tag
         let mcslChunk = this.extractor.dirFile.chunks.find(c => {
             const unprot = DirectorFile.unprotect(c.type);
-            return unprot === 'MCsL' || unprot === 'abmc';
+            return unprot === Magic.MCsL || unprot === Magic.abmc;
         });
 
         let foundViaTag = null;
@@ -159,8 +159,8 @@ class MetadataManager {
         if (!mcslChunk) {
             for (const castId in this.keyTable) {
                 const map = this.keyTable[castId];
-                if (map['CAS*'] || map['cas*']) {
-                    const sectionId = map['CAS*'] || map['cas*'];
+                if (map[Magic.CAS_STAR] || map[Magic.cas_star]) {
+                    const sectionId = map[Magic.CAS_STAR] || map[Magic.cas_star];
                     mcslChunk = this.extractor.dirFile.getChunkById(sectionId);
                     if (mcslChunk) {
                         foundViaTag = 'CAS*';
@@ -182,7 +182,7 @@ class MetadataManager {
             // Determine element size. 
             // Standard MCsL is 16-bit. 
             // Afterburner CAS* is often 32-bit physical IDs.
-            const use32 = (foundViaTag === 'CAS*' || unprotType === 'CAS*' || unprotType === 'cas*') && (data.length % 4 === 0);
+            const use32 = (foundViaTag === Magic.CAS_STAR || unprotType === Magic.CAS_STAR || unprotType === Magic.cas_star) && (data.length % 4 === 0);
 
             this.extractor.castOrder = [];
             let slotIndex = 1;
@@ -236,7 +236,7 @@ class MetadataManager {
             const memberId = this.extractor.castOrder[slotIndex];
             const map = this.keyTable[memberId];
 
-            const isPalette = map && (map['CLUT'] || map['clut'] || map['Palt'] || map['palt']);
+            const isPalette = map && (map[Magic.CLUT] || map[Magic.clut_lower] || map[Magic.Palt] || map[Magic.palt_lower]);
             if (isPalette) {
                 targetId = memberId;
                 source = `CastOrder(Slot ${slotIndex}, ID ${memberId})`;
@@ -249,7 +249,7 @@ class MetadataManager {
             const memberId = this.resToMember[sectionId] || sectionId;
             const map = this.keyTable[memberId];
 
-            const isPalette = map && (map['CLUT'] || map['clut'] || map['Palt'] || map['palt']);
+            const isPalette = map && (map[Magic.CLUT] || map[Magic.clut_lower] || map[Magic.Palt] || map[Magic.palt_lower]);
             if (isPalette) {
                 targetId = memberId;
                 source = 'ILS/LCTX (CLUT)';
@@ -258,10 +258,10 @@ class MetadataManager {
 
         // 3. Try keyTable (cast ID match) - Direct link
         if (!targetId && this.keyTable[paletteId]) {
-            const sectionID = this.keyTable[paletteId]['CLUT'] ||
-                this.keyTable[paletteId]['clut'] ||
-                this.keyTable[paletteId]['Palt'] ||
-                this.keyTable[paletteId]['palt'];
+            const sectionID = this.keyTable[paletteId][Magic.CLUT] ||
+                this.keyTable[paletteId][Magic.clut_lower] ||
+                this.keyTable[paletteId][Magic.Palt] ||
+                this.keyTable[paletteId][Magic.palt_lower];
             if (sectionID) {
                 targetId = paletteId;
                 source = 'KeyTable';
@@ -303,11 +303,13 @@ class MetadataManager {
         if (!member.name) member.name = `member_${memberIdFromRes}`;
         member.name = member.name.trim();
 
+        // Initial Metadata Hash (Header Hash)
+        // This acts as a placeholder until the Worker replaces it with a content hash.
         const hash = crypto.createHash('sha256');
         hash.update(data);
         hash.update(member.name);
         hash.update(CastMember.getTypeName(member.typeId));
-        member.checksum = hash.digest('hex');
+        member.checksum = `header:${hash.digest('hex').substring(0, 8)}`;
 
         const typeName = CastMember.getTypeName(member.typeId);
         this.extractor.stats.total++;
@@ -331,7 +333,7 @@ class MetadataManager {
     async parseDRCF() {
         const drcf = this.extractor.dirFile.chunks.find(c => {
             const unprot = DirectorFile.unprotect(c.type);
-            return unprot === 'DRCF' || unprot === 'VWCF' || unprot === 'fgrD';
+            return unprot === Magic.DRCF || unprot === Magic.VWCF || unprot === Magic.fgrD || unprot === 'fgrD';
         });
         if (!drcf) return;
 

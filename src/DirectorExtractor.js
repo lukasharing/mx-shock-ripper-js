@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.8
  * DirectorExtractor - Orchestrates extraction of Director RIFX files.
  * Robust discovery architecture with regional palette resolution.
  */
@@ -31,8 +31,9 @@ const LingoDecompiler = require('./lingo/LingoDecompiler');
 const LnamParser = require('./lingo/LnamParser');
 const VectorShapeExtractor = require('./member/VectorShapeExtractor');
 const MovieExtractor = require('./member/MovieExtractor');
+const DataStream = require('./utils/DataStream');
 
-const { MemberType, Magic } = require('./Constants');
+const { MemberType, Magic, Resources } = require('./Constants');
 const { Palette, PALETTES } = require('./utils/Palette');
 const { Color } = require('./utils/Color');
 const Logger = require('./utils/Logger');
@@ -152,14 +153,44 @@ class DirectorExtractor extends BaseExtractor {
         const taskQueue = [...processQueue];
         let completedCount = 0;
 
-        // Initialize persistent workers
+        // Initialize persistent workers with accurate ILS offsets
+        const ilsOffsets = {};
+        if (this.dirFile.isAfterburned && this.dirFile.ilsBodyOffset > 0) {
+            const ilsChunk = this.dirFile.chunks.find(c => c.type === Magic.ILS || c.id === 2);
+            if (ilsChunk) {
+                const ilsData = await this.dirFile.getChunkData(ilsChunk);
+                if (ilsData) {
+                    const ds = new DataStream(ilsData, this.dirFile.ds.endianness);
+                    let currentPos = this.dirFile.ilsBodyOffset;
+                    while (ds.position < ds.length) {
+                        const resId = ds.readVarInt();
+                        const chunk = this.dirFile.chunks.find(c => c.id === resId);
+                        if (chunk) {
+                            ilsOffsets[resId] = currentPos;
+                            if (resId === 4361 || resId === 1024) {
+                                console.log(`[DirectorExtractor][DEBUG] Found ILS offset for ${resId}: ${currentPos}`);
+                            }
+                            currentPos += chunk.len;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         for (let i = 0; i < this.concurrency; i++) {
             const worker = new Worker(path.join(__dirname, 'extractor', 'ExtractionWorker.js'), {
                 workerData: {
                     fd: this.dirFile.fd,
                     keyTable: this.metadataManager.keyTable,
                     nameTable: this.metadataManager.nameTable,
-                    chunks: this.dirFile.chunks.map(c => ({ id: c.id, offset: this.dirFile.isAfterburned ? (this.dirFile.ilsBodyOffset + c.off) : (c.off + 8), size: c.len })),
+                    chunks: this.dirFile.chunks.map(c => ({
+                        ...c,
+                        physicalOffset: ilsOffsets[c.id] || (this.dirFile.isAfterburned ? (this.dirFile.ilsBodyOffset + c.off) : (c.off + 8))
+                    })),
+                    isAfterburned: this.dirFile.isAfterburned,
+                    ilsBodyOffset: this.dirFile.ilsBodyOffset,
                     options: { verbose: this.options.verbose, lasm: this.options.lasm }
                 }
             });
@@ -210,6 +241,7 @@ class DirectorExtractor extends BaseExtractor {
                                     member.format = msg.result.format;
                                     if (msg.result.width) member.width = msg.result.width;
                                     if (msg.result.height) member.height = msg.result.height;
+                                    if (msg.result.checksum) member.checksum = msg.result.checksum;
                                 }
                                 workerObj.busy = false;
                                 workerObj.thread.off('message', onMessage);
@@ -217,6 +249,12 @@ class DirectorExtractor extends BaseExtractor {
                                 distributeTasks();
                             } else if (msg.type === 'error' && msg.memberId === member.id) {
                                 this.log('ERROR', `Worker error for ${member.id}: ${msg.error}`);
+                                // Fallback Assignment: Ensure member has a format even on failure
+                                if (!member.format) {
+                                    if (member.typeId === MemberType.Bitmap) member.format = Resources.Formats.PNG;
+                                    else if (member.typeId === MemberType.Script) member.format = Resources.Formats.LS;
+                                    else if (member.typeId === MemberType.Text) member.format = Resources.Formats.RTF;
+                                }
                                 workerObj.busy = false;
                                 workerObj.thread.off('message', onMessage);
                                 completedCount++;
@@ -241,7 +279,25 @@ class DirectorExtractor extends BaseExtractor {
         // Phase 5: Cleanup & Finalization
         await this.matchDanglingScripts();
         this.finalizeCastLibs();
+
+        // Final Clean Pass: Ensure NO member has a null format
+        for (const member of this.members) {
+            if (!member.format) {
+                if (member.typeId === MemberType.Bitmap) member.format = 'png';
+                else if (member.typeId === MemberType.Script) member.format = 'ls';
+                else if (member.typeId === MemberType.Text || member.typeId === MemberType.Field) member.format = 'rtf';
+                else if (member.typeId === MemberType.Sound) member.format = 'wav';
+                else if (member.typeId === MemberType.Palette) member.format = 'pal';
+                else member.format = 'dat';
+            }
+        }
+
+        // Consolidation: Add global contexts to metadata
+        this.metadata.movie = this.metadataManager.movieConfig || {};
+        this.metadata.castLibs = this.castLibs;
+        this.metadata.stats = this.stats;
         this.metadata.members = this.members.map(m => m.toJSON());
+
         this.saveJSON();
         this.saveLog();
 
@@ -282,7 +338,7 @@ class DirectorExtractor extends BaseExtractor {
                     if (this.options.saveLsc) {
                         fs.writeFileSync(path.join(this.outputDir, `${scripts[i].name}.lsc`), data);
                     }
-                    scripts[i].format = 'ls';
+                    scripts[i].format = Resources.Formats.LS;
                 }
             }
         }
@@ -291,9 +347,14 @@ class DirectorExtractor extends BaseExtractor {
     getCastLibHash(castLibIndex, algorithm = 'sha256') {
         const libMembers = this.members
             .filter(m => (m.id >> 16) + 1 === castLibIndex)
-            .sort((a, b) => a.id - b.id);
+            .sort((a, b) => {
+                // Use checksum for order-independent hashing (Set Consensus)
+                // Fallback to ID if checksum is missing (phantom members)
+                if (a.checksum && b.checksum) return a.checksum.localeCompare(b.checksum);
+                return a.id - b.id;
+            });
         if (libMembers.length === 0) return crypto.createHash(algorithm).update('').digest('hex');
-        const compositeChecksum = libMembers.map(m => m.checksum).join('');
+        const compositeChecksum = libMembers.map(m => m.checksum || m.id).join('');
         return crypto.createHash(algorithm).update(compositeChecksum).digest('hex');
     }
 

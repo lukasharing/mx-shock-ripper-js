@@ -701,6 +701,16 @@ class Palette {
         const tracedPal = await this.tracePaletteChain(member, extractor, platform);
         if (tracedPal) return tracedPal;
 
+        // --- SPECIAL CASE: 32-bit Images ---
+        // 32-bit images are technically palette-less (true color), but Director often 
+        // assigns a palette anyway for internal reasons. If resolution fails, 
+        // use the system standard to prevent rendering crashes.
+        if (member.bitDepth === 32) {
+            const sysId = (platform === 'Windows' ? -101 : -1);
+            member.palette = { id: sysId, name: "System Fallback (32-bit)", castlib: 'system', fallback: true };
+            return this.getSystemPaletteById(sysId, platform);
+        }
+
         // --- LEGACY HEURISTICS START ---
         const isInternalPriority = !hasModernBit || member._compression !== 0;
 

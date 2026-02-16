@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.8
  * FontExtractor.js - Extraction logic for Director VWFT/FONT assets
  * 
  * Preserves the proprietary binary structure of Director font members, 
@@ -8,6 +8,7 @@
 
 const GenericExtractor = require('./GenericExtractor');
 const DataStream = require('../utils/DataStream');
+const { Resources } = require('../Constants');
 
 class FontExtractor extends GenericExtractor {
     constructor(log) {
@@ -18,7 +19,7 @@ class FontExtractor extends GenericExtractor {
      * Inspects the buffer for standard Font signatures.
      */
     extract(buffer) {
-        if (!buffer || buffer.length < 12) return { data: buffer, ext: '.font' };
+        if (!buffer || buffer.length < 12) return { data: buffer, ext: Resources.FileExtensions.Font };
 
         const ds = new DataStream(buffer, 'big');
 
@@ -37,12 +38,12 @@ class FontExtractor extends GenericExtractor {
                 // Found potential font start
                 return {
                     data: buffer.slice(i),
-                    ext: (sig === 0x4F54544F) ? '.otf' : '.ttf'
+                    ext: (sig === 0x4F54544F) ? '.' + Resources.Formats.OTF : '.' + Resources.Formats.TTF
                 };
             }
         }
 
-        return { data: buffer, ext: '.font' };
+        return { data: buffer, ext: Resources.FileExtensions.Font };
     }
 
     /**

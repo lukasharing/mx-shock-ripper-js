@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.8
  * TextExtractor.js - Extraction logic for Director Text and Field members
  * 
  * Handles STXT and TEXT chunks. Exports as RTF to preserve potential formatting 
@@ -8,7 +8,7 @@
 
 const GenericExtractor = require('./GenericExtractor');
 const DataStream = require('../utils/DataStream');
-const { HeaderSize } = require('../Constants');
+const { HeaderSize, Resources } = require('../Constants');
 
 class TextExtractor extends GenericExtractor {
     constructor(log) {
@@ -65,8 +65,8 @@ class TextExtractor extends GenericExtractor {
     save(buffer, outputPath, member, options = {}) {
         const rtfContent = this.extract(buffer, options);
         // Use the provided outputPath extension if it's already there (e.g. .props)
-        const finalPath = (outputPath.includes('.') && !outputPath.endsWith('.rtf')) ? outputPath :
-            (outputPath.endsWith('.rtf') ? outputPath : outputPath + '.rtf');
+        const finalPath = (outputPath.includes('.') && !outputPath.endsWith('.' + Resources.Formats.RTF)) ? outputPath :
+            (outputPath.endsWith('.' + Resources.Formats.RTF) ? outputPath : outputPath + '.' + Resources.Formats.RTF);
 
         const formatLabel = options.useRaw ? "Text (Raw)" : "Text (RTF)";
         const result = this.saveFile(Buffer.from(rtfContent, 'utf8'), finalPath, formatLabel);
@@ -75,7 +75,7 @@ class TextExtractor extends GenericExtractor {
             return {
                 file: result.file,
                 size: result.size,
-                format: options.useRaw ? (outputPath.split('.').pop() || 'txt') : 'rtf'
+                format: options.useRaw ? (outputPath.split('.').pop() || Resources.Formats.TEXT || 'txt') : Resources.Formats.RTF
             };
         }
         return false;

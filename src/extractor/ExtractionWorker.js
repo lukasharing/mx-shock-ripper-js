@@ -1,6 +1,8 @@
 const { parentPort, workerData } = require('worker_threads');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const zlib = require('zlib');
 
 const BitmapExtractor = require('../member/BitmapExtractor');
 const PaletteExtractor = require('../member/PaletteExtractor');
@@ -13,14 +15,15 @@ const VectorShapeExtractor = require('../member/VectorShapeExtractor');
 const MovieExtractor = require('../member/MovieExtractor');
 const GenericExtractor = require('../member/GenericExtractor');
 const LingoDecompiler = require('../lingo/LingoDecompiler');
-const { MemberType, Magic } = require('../Constants');
+const { MemberType, Magic, Resources } = require('../Constants');
 
 /**
  * ExtractionWorker.js (Level 3 - Zero Contention)
  * Uses shared FD and metadata to perform autonomous Disk I/O.
  */
 
-const { fd, keyTable, nameTable, chunks, options: workerOptions } = workerData;
+const { fd, keyTable, nameTable, chunks, options: workerOptions, isAfterburned, ilsBodyOffset } = workerData;
+
 
 const logProxy = (lvl, msg, memberId) => {
     parentPort.postMessage({ type: 'log', lvl, msg, memberId });
@@ -31,9 +34,44 @@ const getChunkById = (id) => chunks.find(c => c.id === id);
 
 const getChunkData = async (chunk) => {
     if (!chunk) return null;
-    const buf = Buffer.alloc(chunk.size);
-    fs.readSync(fd, buf, 0, chunk.size, chunk.offset);
-    return buf;
+    try {
+        const physicalOffset = chunk.physicalOffset;
+        if (physicalOffset === undefined || physicalOffset < 0) {
+            // Safety: offset -1 usually means it's an ILS chunk that didn't get mapped
+            // We should not attempt to read it from FD as it will read from end of headers (incorrect)
+            return null;
+        }
+
+        const buf = Buffer.alloc(chunk.len);
+        fs.readSync(fd, buf, 0, chunk.len, physicalOffset);
+
+        let data = buf;
+        // Robust decompression trail: zlib -> raw -> raw+offset
+        if (chunk.compType === 1 || (chunk.uncompLen > 0 && chunk.uncompLen !== chunk.len)) {
+            try {
+                data = zlib.inflateSync(buf);
+            } catch (e) {
+                try {
+                    data = zlib.inflateRawSync(buf);
+                } catch (e2) {
+                    // Fallback: If both fail, try scanning for Zlib header (0x78)
+                    for (let i = 0; i < Math.min(buf.length, 128); i++) {
+                        if (buf[i] === 0x78 && (buf[i + 1] === 0x01 || buf[i + 1] === 0x9C || buf[i + 1] === 0xDA)) {
+                            try {
+                                data = zlib.inflateSync(buf.slice(i));
+                                break;
+                            } catch (inner) { }
+                        }
+                    }
+                    if (!data) data = buf;
+                }
+            }
+        }
+        return data;
+    } catch (e) {
+        logProxy('ERROR', `Failed to read/decompress chunk ${chunk.id}: ${e.message}`);
+        return null;
+    }
 };
 
 // Mock extractor for sub-extractors
@@ -66,8 +104,8 @@ parentPort.on('message', async (task) => {
             return;
         }
 
-        const sectionId = map[Magic.CAST] || map['CAS*'] || map['CAsT'] || map['cast'] ||
-            map[Magic.BITD] || map['ABMP'] || map[Magic.STXT] || Object.values(map)[0];
+        const sectionId = map[Magic.CAST] || map[Magic.CAS_STAR] || map[Magic.CAsT] || map[Magic.cast_lower] ||
+            map[Magic.BITD] || map[Magic.ABMP] || map[Magic.STXT] || Object.values(map)[0];
 
         const chunk = getChunkById(sectionId);
         if (!chunk) throw new Error(`Missing chunk ${sectionId} for member ${memberId}`);
@@ -84,32 +122,40 @@ parentPort.on('message', async (task) => {
                 const alphaChunk = getChunkById(map[Magic.ALFA]);
                 if (alphaChunk) alphaData = await getChunkData(alphaChunk);
             }
-            result = await bitmapExtractor.extract(data, outPathPrefix + ".png", member, palette, alphaData);
+            result = await bitmapExtractor.extract(data, outPathPrefix + Resources.FileExtensions.PNG, member, palette, alphaData);
         } else if (typeId === MemberType.Sound) {
-            result = await soundExtractor.save(data, outPathPrefix + ".wav", member);
+            result = await soundExtractor.save(data, outPathPrefix + Resources.FileExtensions.WAV, member);
         } else if (typeId === MemberType.Text || typeId === MemberType.Field) {
-            const hasExt = (member.name || '').match(/\.(props|txt|json|xml|html|css|js|ls|lsc)$/i);
+            const hasExt = (member.name || '').match(Resources.Regex.TextExtMatch);
             const ext = hasExt ? '' : '.rtf';
             result = await textExtractor.save(data, outPathPrefix + ext, member, { useRaw: !!hasExt });
         } else if (typeId === MemberType.Shape) {
-            result = await shapeExtractor.save(outPathPrefix + ".svg", member, palette);
+            result = await shapeExtractor.save(outPathPrefix + Resources.FileExtensions.SVG, member, palette);
         } else if (typeId === MemberType.Font) {
-            result = await fontExtractor.save(data, outPathPrefix + ".fnt");
+            result = await fontExtractor.save(data, outPathPrefix + Resources.FileExtensions.Font);
         } else if (typeId === MemberType.VectorShape) {
-            result = await vectorShapeExtractor.save(data, outPathPrefix + ".svg", member);
+            result = await vectorShapeExtractor.save(data, outPathPrefix + Resources.FileExtensions.SVG, member);
         } else if (typeId === MemberType.FilmLoop) {
-            result = await movieExtractor.save(data, outPathPrefix + ".json", member);
+            result = await movieExtractor.save(data, outPathPrefix + Resources.FileExtensions.JSON, member);
         } else if (typeId === MemberType.Script) {
             const decompiled = lingoDecompiler.decompile(data, nameTable, 0, memberId, workerOptions);
             const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
             if (source) {
-                fs.writeFileSync(outPathPrefix + ".ls", source);
+                fs.writeFileSync(outPathPrefix + Resources.FileExtensions.Script, source);
                 if (workerOptions.lasm && decompiled.lasm) fs.writeFileSync(outPathPrefix + ".lasm", decompiled.lasm);
-                result = { format: 'ls', file: outPathPrefix + ".ls" };
+                result = { format: Resources.Formats.LS, file: outPathPrefix + Resources.FileExtensions.Script };
             }
         } else {
             if (data && data.length > 0) {
-                result = await genericExtractor.save(data, outPathPrefix + ".dat");
+                result = await genericExtractor.save(data, outPathPrefix + Resources.FileExtensions.Binary);
+            }
+        }
+
+        if (result && (result.file || result.path)) {
+            const outPath = result.path || path.join(path.dirname(outPathPrefix), result.file);
+            if (fs.existsSync(outPath)) {
+                const finalBuf = fs.readFileSync(outPath);
+                result.checksum = crypto.createHash('sha256').update(finalBuf).digest('hex');
             }
         }
 

@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.8
  * Resources.js - Display labels and file extension mapping
  */
 
@@ -29,6 +29,28 @@ module.exports = {
         Xtra: 'xtra'
     },
     Regex: {
-        FilenameSanitize: /[\/\\?%*:|"<>\s]/g
+        FilenameSanitize: /[\/\\?%*:|"<>\s]/g,
+        TextExtMatch: /\.(props|txt|json|xml|html|css|js|ls|lsc)$/i
+    },
+    Formats: {
+        PNG: 'png',
+        WAV: 'wav',
+        RTF: 'rtf',
+        LS: 'ls',
+        LASM: 'lasm',
+        DAT: 'dat',
+        SVG: 'svg',
+        FNT: 'fnt',
+        PAL: 'pal',
+        JSON: 'json',
+        IMA4: 'ima4',
+        MP3: 'mp3',
+        SWA: 'swa',
+        RAW: 'raw',
+        TWOS: 'twos',
+        MACE: 'mace',
+        UNKNOWN: 'unknown',
+        OTF: 'otf',
+        TTF: 'ttf'
     }
 };
