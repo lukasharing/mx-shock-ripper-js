@@ -22,7 +22,7 @@ const { MemberType, Magic, Resources } = require('../Constants');
  * Uses shared FD and metadata to perform autonomous Disk I/O.
  */
 
-const { fd, keyTable, nameTable, chunks, options: workerOptions, isAfterburned, ilsBodyOffset } = workerData;
+const { fd, keyTable, nameTable, chunks, fmap, options: workerOptions, isAfterburned, ilsBodyOffset } = workerData;
 
 
 const logProxy = (lvl, msg, memberId) => {
@@ -30,7 +30,10 @@ const logProxy = (lvl, msg, memberId) => {
 };
 
 // Autonomous Data Accessor (Simplified version of DirectorFile logic for Worker)
-const getChunkById = (id) => chunks.find(c => c.id === id);
+const getChunkById = (id) => {
+    const physicalId = (fmap && fmap[id] !== undefined) ? fmap[id] : id;
+    return chunks.find(c => c.id === physicalId);
+};
 
 const getChunkData = async (chunk) => {
     if (!chunk) return null;

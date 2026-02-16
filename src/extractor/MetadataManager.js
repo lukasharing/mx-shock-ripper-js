@@ -182,7 +182,8 @@ class MetadataManager {
             // Determine element size. 
             // Standard MCsL is 16-bit. 
             // Afterburner CAS* is often 32-bit physical IDs.
-            const use32 = (foundViaTag === Magic.CAS_STAR || unprotType === Magic.CAS_STAR || unprotType === Magic.cas_star) && (data.length % 4 === 0);
+            const mcslType = DirectorFile.unprotect(mcslChunk.type);
+            const use32 = (foundViaTag === Magic.CAS_STAR || mcslType === Magic.CAS_STAR || mcslType === Magic.cas_star) && (data.length % 4 === 0);
 
             this.extractor.castOrder = [];
             let slotIndex = 1;
@@ -213,7 +214,7 @@ class MetadataManager {
 
     /**
      * Resolves a palette cast slot number to its actual section ID.
-     * @param {number} castSlot - The cast slot number from paletteId
+     * @param {number} paletteId - The cast slot number from paletteId
      * @returns {number|null} - The section ID of the palette, or null if not found
      */
     resolvePaletteId(paletteId) {
@@ -224,15 +225,12 @@ class MetadataManager {
 
         // Director Palette Resolution Logic:
         // Member logical IDs start at minMember (typically 1 or 4 in legacy variants).
-        // paletteId in BITD/CASt refers to a logical member index.
         // Formula: SlotIndex = paletteId - minMember + 1
-        // This accounts for the "3-slot shift" in certain variants (minMember=4)
-        // vs direct mapping in others (minMember=1).
         const minMember = (this.movieConfig && this.movieConfig.minMember !== undefined) ? this.movieConfig.minMember : 1;
         const slotIndex = paletteId - minMember + 1;
 
-        // 1. Try Cast Order Map (MCsL / CAS*) - Primary for slot-based paletteId
-        if (slotIndex >= 0 && slotIndex < this.extractor.castOrder.length) {
+        // 1. Try Cast Order Map (MCsL / CAS*) - Primary Authority
+        if (this.extractor.castOrder && slotIndex >= 0 && slotIndex < this.extractor.castOrder.length) {
             const memberId = this.extractor.castOrder[slotIndex];
             const map = this.keyTable[memberId];
 

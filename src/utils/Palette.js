@@ -506,17 +506,27 @@ class Palette {
 
     /**
      * Fundamentals: Traces the palette reference chain across members (borrowing).
+     * @param {Object} member - The member requesting the palette.
+     * @param {Object} extractor - The extractor context.
+     * @param {string} platform - The target platform.
+     * @param {number} [targetId] - An explicit ID to trace (optional).
+     * @param {Set} [visited] - Prevent infinite loops.
      */
-    static async tracePaletteChain(member, extractor, platform, visited = new Set()) {
+    static async tracePaletteChain(member, extractor, platform, targetId = null, visited = new Set()) {
         if (visited.has(member.id)) return null;
         visited.add(member.id);
         if (visited.size > 10) return null;
 
-        const hasModernBit = (member._castFlags & 0x20) !== 0;
-        let linkId = (hasModernBit && member.secondaryPaletteId) ? member.secondaryPaletteId : member.paletteId;
+        let linkId = targetId;
 
-        // 1. No Palette reference
-        if (linkId === 0 || linkId === -1 || !linkId) return null;
+        // If no explicit ID provided, determine from member
+        if (linkId === null) {
+            const hasModernBit = (member._castFlags & 0x20) !== 0;
+            linkId = (hasModernBit && member.secondaryPaletteId) ? member.secondaryPaletteId : member.paletteId;
+        }
+
+        // 1. No Palette reference (0 is canonical for Movie Default, handled upstream)
+        if (linkId === 0 || linkId === null || linkId === undefined) return null;
 
         // 2. Negative IDs are explicit System Palettes
         if (linkId < 0) {
@@ -546,7 +556,7 @@ class Palette {
                         return pal;
                     }
                 } else if (target.typeId === 1 || target.type === 'Bitmap') {
-                    const borrowedPal = await this.tracePaletteChain(target, extractor, platform, visited);
+                    const borrowedPal = await this.tracePaletteChain(target, extractor, platform, null, visited);
                     if (borrowedPal) {
                         member.palette = Object.assign({}, target.palette, { traced: true, borrowedFrom: target.name });
                         return borrowedPal;
@@ -571,11 +581,6 @@ class Palette {
             }
 
             if (slotValue !== undefined) {
-                // The slot contains a value (e.g. 20). 
-                // We need to find the member that corresponds to this value (Internal ID or Cast ID).
-                // MetadataManager parses 'originalSlotId' from CASt chunks (Internal ID).
-                // Sometimes the slotValue IS the Member ID directly (if no aliasing).
-
                 if (extractor.members) {
                     // Try linking via Internal ID (Aliasing)
                     let target = extractor.members.find(m => m.originalSlotId === slotValue && (m.type === 'Palette' || m.typeId === 4));
@@ -586,7 +591,6 @@ class Palette {
                     }
 
                     if (target) {
-                        // Found it!
                         const data = target.palette?.data || target.palette || target.data;
                         const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
                         if (pal) {
@@ -610,7 +614,7 @@ class Palette {
                         return pal;
                     }
                 } else if (externalMember.typeId === 1 || externalMember.type === 'Bitmap') {
-                    const borrowedPal = await this.tracePaletteChain(externalMember, extractor, platform, visited);
+                    const borrowedPal = await this.tracePaletteChain(externalMember, extractor, platform, null, visited);
                     if (borrowedPal) {
                         member.palette = Object.assign({}, externalMember.palette, { traced: true, borrowedFrom: externalMember.name });
                         return borrowedPal;
@@ -670,72 +674,91 @@ class Palette {
 
     /**
      * Resolves the correct palette for a member based on its properties and project context.
-     * Logic moved from PaletteResolver.js
      */
     static async resolveMemberPalette(member, extractor) {
         const { name, platform } = member;
 
-        // --- FUNDAMENTAL -1: 1-bit Override ---
-        // 1-bit images in Director are strictly Black/White (Mac System).
-        // They should ignore any assigned palette ID.
+        // --- PHASE 1: Fundamental Overrides ---
+
+        // 1-bit images are strictly Black/White.
         if (member.bitDepth === 1) {
             return PALETTES.MAC;
         }
 
-        // --- FUNDAMENTAL 0: Logical ID Conversion ---
+        // --- PHASE 2: Canonical Resolution ---
+
         let logicalPaletteId = member.paletteId;
         const hasModernBit = (member._castFlags & 0x20) !== 0;
-
-        // If modern bit is set and we have a secondary ID, use it
         if (hasModernBit && member.secondaryPaletteId) {
             logicalPaletteId = member.secondaryPaletteId;
         }
 
-        // --- FUNDAMENTAL 1: Movie Default Palette ---
-        // If paletteId is 0, we should use the movie's default palette from DRCF
+        // Canonical Movie Default Resolution (ScummVM-style)
+        // If ID is 0/-1, we check if a movie-wide default is set in the DRCF.
         if ((logicalPaletteId === 0 || logicalPaletteId === -1) && extractor?.metadataManager?.movieConfig?.defaultPaletteId) {
-            logicalPaletteId = extractor.metadataManager.movieConfig.defaultPaletteId;
+            const defId = extractor.metadataManager.movieConfig.defaultPaletteId;
+            const defPal = await this.tracePaletteChain(member, extractor, platform, defId);
+            if (defPal) {
+                if (!member.palette) member.palette = {};
+                member.palette.canonical = 'movie-default';
+                return defPal;
+            }
         }
 
-        // --- FUNDAMENTAL 2: Trace Reference Chains ---
-        const tracedPal = await this.tracePaletteChain(member, extractor, platform);
+        // --- PHASE 3: Trace Reference Chains ---
+        const tracedPal = await this.tracePaletteChain(member, extractor, platform, logicalPaletteId);
         if (tracedPal) return tracedPal;
 
-        // --- SPECIAL CASE: 32-bit Images ---
+        // --- PHASE 4: Generalized Fallback for unresolvable IDs ---
+        // If a specific ID was requested (> 0) but didn't resolve to a known palette,
+        // and we have an internal palette, use the first one.
+        // This handles cases like Habbo's localized palette ID 99 or 1 references
+        // where the ILS/Slot map is incomplete or non-standard.
+        if (logicalPaletteId > 0 && extractor?.members) {
+            const internalPals = extractor.members.filter(m => m.typeId === 4);
+            if (internalPals.length > 0) {
+                const firstPal = internalPals[0];
+                const palData = firstPal.palette ? (firstPal.palette.data || firstPal.palette) : null;
+                const pal = palData ? (Array.isArray(palData) ? palData : this.parseDirector(palData)) : null;
+                if (pal) {
+                    member.palette = {
+                        id: firstPal.id,
+                        name: firstPal.name,
+                        castlib: 'internal',
+                        resolution: 'generalized-fallback',
+                        originalId: logicalPaletteId
+                    };
+                    return pal;
+                }
+            }
+        }
+
+        // --- PHASE 5: Heuristics & Specific Fallbacks ---
+
         // 32-bit images are technically palette-less (true color), but Director often 
-        // assigns a palette anyway for internal reasons. If resolution fails, 
-        // use the system standard to prevent rendering crashes.
+        // assigns a palette anyway. If resolution fails, use the system standard.
         if (member.bitDepth === 32) {
             const sysId = (platform === 'Windows' ? -101 : -1);
             member.palette = { id: sysId, name: "System Fallback (32-bit)", castlib: 'system', fallback: true };
             return this.getSystemPaletteById(sysId, platform);
         }
 
-        // --- LEGACY HEURISTICS START ---
-        const isInternalPriority = !hasModernBit || member._compression !== 0;
-
-        // Standard System IDs - Check this early if tracing failed
-        // [MODIFIED] Commented out. Positive IDs should only be System if they were in LCTX.
-        // Otherwise, they are Cast Member IDs. If missing, fall to heuristics.
-        /*
-        if (logicalPaletteId > 0 && logicalPaletteId <= 100) {
-            const sys = this.getSystemPaletteById(logicalPaletteId, platform);
-            if (sys) {
-                member.palette = { id: logicalPaletteId, name: this.getSystemPaletteName(logicalPaletteId), castlib: 'system' };
-                return sys;
-            }
-        }
-        */
-
-        // Contextual Search (Generic Filter: Preceding Palette in same cast)
-        if (isInternalPriority && extractor.members) {
+        // Contextual Search: Preceding Palette in same cast
+        // In Director, unresolved palette IDs (0/null) inherit from the nearest preceding
+        // palette member in the cast ID sequence.
+        if (extractor?.members) {
             const pals = extractor.members.filter(m => m.typeId === 4);
             const preceding = pals.filter(m => m.id < member.id).sort((a, b) => b.id - a.id);
             let internalPal = (preceding.length > 0) ? preceding[0] : null;
 
+            // If no preceding palette, use the first palette in the cast
+            if (!internalPal && pals.length > 0) {
+                internalPal = pals[0];
+            }
+
             if (internalPal) {
                 const palData = internalPal.palette ? (internalPal.palette.data || internalPal.palette) : null;
-                const pal = palData ? this.parseDirector(palData) : null;
+                const pal = palData ? (Array.isArray(palData) ? palData : this.parseDirector(palData)) : null;
                 if (pal) {
                     member.palette = { id: internalPal.id, name: internalPal.name, castlib: 'internal', heuristic: 'preceding' };
                     return pal;
@@ -743,7 +766,7 @@ class Palette {
             }
         }
 
-        // Ultimate Fallback
+        // --- PHASE 5: Ultimate Fallback ---
         const defaultId = (platform === 'Windows' ? -101 : -1);
         member.palette = { id: defaultId, name: "System Fallback", castlib: 'system', fallback: true };
         return this.getSystemPaletteById(defaultId, platform);

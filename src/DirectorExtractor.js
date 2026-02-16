@@ -1,5 +1,5 @@
 /**
- * @version 1.3.9
+ * @version 1.4.0
  * DirectorExtractor - Orchestrates extraction of Director RIFX files.
  * Robust discovery architecture with regional palette resolution.
  */
@@ -144,10 +144,37 @@ class DirectorExtractor extends BaseExtractor {
         // Phase 4: Member Content Processing (Persistent Worker Pool)
         this.log('INFO', `Processing ${this.members.length} members with persistent Worker Pool (Threads: ${this.concurrency})`);
 
+        const contentTags = [
+            Magic.CAST, Magic.CAS_STAR, Magic.CArT, Magic.cast_lower,
+            Magic.BITD, Magic.DIB, Magic.dib_star, Magic.bitd_lower,
+            Magic.STXT, Magic.stxt_lower, Magic.TXTS,
+            Magic.SND, Magic.snd_lower, Magic.snd_star
+        ];
+
         const processQueue = this.members.filter(m => {
             if (m.typeId === MemberType.Palette) return false;
-            // Skip members that have no physical mapping in the keyTable (phantom slots)
-            return !!this.metadataManager.keyTable[m.id];
+
+            const map = this.metadataManager.keyTable[m.id];
+            if (!map) return false;
+
+            // Strict Content Check:
+            // We only process members that either have their "primary" chunk (BITD, LSCR, etc.)
+            // OR at least one of the known content tags (DIB, STXT, etc.).
+            // This prevents flooding with phantom/Thum-only members.
+            const primaryTag = this.getPrimaryTagForType(m.typeId);
+            const hasPrimary = primaryTag && map[primaryTag];
+
+            const tags = Object.keys(map);
+            const hasContent = tags.some(t => contentTags.includes(t));
+
+            if (!hasPrimary && !hasContent) {
+                if (this.options.verbose) {
+                    this.log('DEBUG', `Skipping member ${m.id} (${m.name}): no content chunks found (Tags: ${tags.join(', ')})`);
+                }
+                return false;
+            }
+
+            return true;
         });
         const workers = [];
         const taskQueue = [...processQueue];
@@ -189,6 +216,7 @@ class DirectorExtractor extends BaseExtractor {
                         ...c,
                         physicalOffset: ilsOffsets[c.id] || (this.dirFile.isAfterburned ? (this.dirFile.ilsBodyOffset + c.off) : (c.off + 8))
                     })),
+                    fmap: this.dirFile.fmap || {},
                     isAfterburned: this.dirFile.isAfterburned,
                     ilsBodyOffset: this.dirFile.ilsBodyOffset,
                     options: { verbose: this.options.verbose, lasm: this.options.lasm }
@@ -283,12 +311,12 @@ class DirectorExtractor extends BaseExtractor {
         // Final Clean Pass: Ensure NO member has a null format
         for (const member of this.members) {
             if (!member.format) {
-                if (member.typeId === MemberType.Bitmap) member.format = 'png';
-                else if (member.typeId === MemberType.Script) member.format = 'ls';
-                else if (member.typeId === MemberType.Text || member.typeId === MemberType.Field) member.format = 'rtf';
-                else if (member.typeId === MemberType.Sound) member.format = 'wav';
-                else if (member.typeId === MemberType.Palette) member.format = 'pal';
-                else member.format = 'dat';
+                if (member.typeId === MemberType.Bitmap) member.format = Resources.Formats.PNG;
+                else if (member.typeId === MemberType.Script) member.format = Resources.Formats.LS;
+                else if (member.typeId === MemberType.Text || member.typeId === MemberType.Field) member.format = Resources.Formats.RTF;
+                else if (member.typeId === MemberType.Sound) member.format = Resources.Formats.WAV;
+                else if (member.typeId === MemberType.Palette) member.format = Resources.Formats.PAL;
+                else member.format = Resources.Formats.DAT;
             }
         }
 
@@ -319,6 +347,22 @@ class DirectorExtractor extends BaseExtractor {
         this.dirFile.close();
         this.log('SUCCESS', `Extraction complete. Extracted ${this.members.length} members. Output: ${this.outputDir}`);
         return { path: this.outputDir, stats: this.stats };
+    }
+
+    getPrimaryTagForType(typeId) {
+        switch (typeId) {
+            case MemberType.Bitmap: return Magic.BITD;
+            case MemberType.Text:
+            case MemberType.Field: return Magic.STXT;
+            case MemberType.Script: return Magic.LSCR;
+            case MemberType.Sound: return Magic.SND;
+            case MemberType.Shape:
+            case MemberType.Button: return Magic.CAST;
+            case MemberType.VectorShape: return Magic.VCSH;
+            case MemberType.Movie: return Magic.VWCF;
+            case MemberType.Palette: return Magic.CLUT;
+            default: return null;
+        }
     }
 
     async loadSharedPalettes(filePath) {

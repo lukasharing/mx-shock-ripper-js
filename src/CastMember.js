@@ -1,5 +1,5 @@
 /**
- * @version 1.3.9
+ * @version 1.4.0
  * CastMember.js - Metadata & geometric state for a single Cast Member
  */
 
@@ -243,42 +243,70 @@ class CastMember {
     }
 
     toJSON() {
-        const obj = {
+        const common = {
             id: this.id,
             name: this.name,
             type: this.type,
-            width: this.width,
-            height: this.height,
-            regPoint: this.regPoint,
-            scriptId: this.scriptId,
-            paletteId: this.paletteId,
-            bitDepth: this.bitDepth,
-            created: this.created,
+            num: this.num, // If available
             modified: this.modified,
-            flags: this.flags,
-            palette: (this.palette && !Array.isArray(this.palette)) ? this.palette : undefined,
-            shapeType: this.shapeType,
-            pattern: this.pattern,
-            foreColor: this.foreColor,
-            backColor: this.backColor,
-            lineSize: this.lineSize,
-            lineDir: this.lineDir,
-            scriptType: this.scriptType,
-            scriptLength: this.scriptLength,
-            format: this.format,
-            _compression: this._compression,
-            _castFlags: this._castFlags,
-            _alphaCastId: this._alphaCastId,
-            checksum: this.checksum
+            loaded: this.loaded, // If available
+            format: this.format
         };
-        if (this.rect && (this.rect.right !== 0 || this.rect.bottom !== 0)) obj.rect = this.rect;
-        return Object.fromEntries(
-            Object.entries(obj).filter(([k, v]) => {
-                if (['id', 'name', 'type'].includes(k)) return true;
-                if (k === 'type' && (v === 'Null' || v === 'Unknown(0)')) return false;
-                return v !== null && v !== undefined && v !== '';
-            })
+
+        // Filter out null/undefined common fields
+        const result = Object.fromEntries(
+            Object.entries(common).filter(([_, v]) => v !== undefined && v !== null && v !== '')
         );
+
+        // Type-Specific Attributes
+        switch (this.typeId) {
+            case MemberType.Bitmap: // 1
+                if (this.width) result.width = this.width;
+                if (this.height) result.height = this.height;
+                if (this.regPoint) result.regPoint = this.regPoint;
+                if (this.bitDepth) result.bitDepth = this.bitDepth;
+                if (this.paletteId > 0) result.paletteId = this.paletteId;
+                break;
+
+            case MemberType.Shape: // 2
+            case MemberType.VectorShape: // 10
+                result.shapeType = this.shapeType;
+                if (this.rect && (this.rect.right !== 0 || this.rect.bottom !== 0)) result.rect = this.rect;
+                if (this.pattern) result.pattern = this.pattern;
+                if (this.foreColor) result.foreColor = this.foreColor;
+                if (this.backColor) result.backColor = this.backColor;
+                if (this.lineSize) result.lineSize = this.lineSize;
+                result.filled = this.filled; // If available
+                break;
+
+            case MemberType.Script: // 11
+                result.scriptType = this.scriptType;
+                if (this.scriptId) result.scriptId = this.scriptId;
+                break;
+
+            case MemberType.Text: // 3
+            case MemberType.Field: // 12
+                if (this.text) result.text = this.text;
+                if (this.font) result.font = this.font;
+                if (this.size) result.size = this.size;
+                if (this.style) result.style = this.style;
+                if (this.foreColor) result.foreColor = this.foreColor;
+                if (this.backColor) result.backColor = this.backColor;
+                if (this.rect && (this.rect.right !== 0 || this.rect.bottom !== 0)) result.rect = this.rect;
+                break;
+
+            case MemberType.Palette: // 4
+                // Palette members are usually just a list of colors, often large, so we might skip the 'palette' array unless requested.
+                // For now, keeping it minimal as per plan.
+                break;
+        }
+
+        // Always include regPoint for visual members if it exists and wasn't added above
+        if (!result.regPoint && this.regPoint && (this.typeId === MemberType.Bitmap || this.typeId === MemberType.Shape || this.typeId === MemberType.VectorShape || this.typeId === MemberType.Flash)) {
+            result.regPoint = this.regPoint;
+        }
+
+        return result;
     }
 }
 

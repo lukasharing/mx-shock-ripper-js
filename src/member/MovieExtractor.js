@@ -1,5 +1,5 @@
 /**
- * @version 1.3.9
+ * @version 1.4.0
  * MovieExtractor.js - Extraction logic for Movie and FilmLoop members
  * 
  * Handles parsing of internal Score data for FilmLoops (Type 2).

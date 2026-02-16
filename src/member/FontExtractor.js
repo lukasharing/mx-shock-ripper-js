@@ -1,5 +1,5 @@
 /**
- * @version 1.3.9
+ * @version 1.4.0
  * FontExtractor.js - Extraction logic for Director VWFT/FONT assets
  * 
  * Preserves the proprietary binary structure of Director font members, 
