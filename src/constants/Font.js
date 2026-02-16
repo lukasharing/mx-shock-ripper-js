@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.9
  * Font.js - Magic numbers for font assets
  */
 

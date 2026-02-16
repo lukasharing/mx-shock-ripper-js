@@ -1,9 +1,10 @@
 /**
- * @version 1.3.7
+ * @version 1.3.9
  * MemberType.js - Direct identifiers for different Cast Member types
  */
 
 module.exports = {
+    Null: 0,
     Bitmap: 1,
     FilmLoop: 2,
     Text: 3,

@@ -1,11 +1,11 @@
 /**
- * @version 1.3.8
+ * @version 1.3.9
  * SoundExtractor.js - Handles extraction and conversion of Director 
  * sound (SND) assets. Supports SWA, MP3, and standard PCM.
  */
 const GenericExtractor = require('./GenericExtractor');
 const DataStream = require('../utils/DataStream');
-const { Resources: { FileExtensions }, Sound: { Signatures: SoundSignatures, Codecs: SoundCodecs } } = require('../Constants');
+const { Resources, Resources: { FileExtensions }, Sound: { Signatures: SoundSignatures, Codecs: SoundCodecs, SignaturesExtra: SoundSignaturesExtra } } = require('../Constants');
 
 class SoundExtractor extends GenericExtractor {
     constructor(logger) {
@@ -75,7 +75,7 @@ class SoundExtractor extends GenericExtractor {
 
         // Check for SWA / MP3 Signature
         const firstUint = ds.readUint32();
-        if (firstUint === signatures.SWA_MAGIC || buffer.slice(0, 4).toString() === SoundSignatures.SignaturesExtra.PTVW) {
+        if (firstUint === signatures.SWA_MAGIC || buffer.slice(0, 4).toString() === SoundSignaturesExtra.PTVW) {
             return { format: Resources.Formats.SWA, offset: 0 }; // Offset calculated later
         }
 
@@ -234,7 +234,7 @@ class SoundExtractor extends GenericExtractor {
         header.write(SoundSignatures.RIFF, 0);
         header.writeUInt32LE(36 + dataSize, 4);
         header.write(SoundSignatures.WAVE, 8);
-        header.write(SoundSignatures.SignaturesExtra.FMT, 12);
+        header.write(SoundSignaturesExtra.FMT, 12);
         header.writeUInt32LE(16, 16);
         header.writeUInt16LE(1, 20); // PCM
         header.writeUInt16LE(numChannels, 22);
@@ -244,7 +244,7 @@ class SoundExtractor extends GenericExtractor {
         header.writeUInt32LE(byteRate, 28);
         header.writeUInt16LE(blockAlign, 32);
         header.writeUInt16LE(sampleSize, 34);
-        header.write(SoundSignatures.SignaturesExtra.DATA, 36);
+        header.write(SoundSignaturesExtra.DATA, 36);
         header.writeUInt32LE(dataSize, 40);
         return header;
     }

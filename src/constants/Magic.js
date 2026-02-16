@@ -1,5 +1,5 @@
 /**
- * @version 1.3.8
+ * @version 1.3.9
  * Magic.js - FourCC identifiers and Magic numbers for Director chunks
  */
 
@@ -13,6 +13,7 @@ module.exports = {
     CAST: 'CASt', // Cast Member Data
     LNAM: 'Lnam', // Lingo Name Table
     LSCR: 'Lscr', // Lingo Script Bytecode
+    LSCR_UPPER: 'LSCR',
     LCTX: 'LctX', // Lingo Context (Metadata)
     VWFT: 'VWFT', // Vector Font
     FONT: 'FONT', // Standard Font

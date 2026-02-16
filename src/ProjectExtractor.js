@@ -1,5 +1,5 @@
 /**
- * @version 1.3.8
+ * @version 1.3.9
  * ProjectExtractor.js - Multi-file orchestration & Global Resource Management
  * 
  * Handles the recursive discovery of linked cast libraries (.cct/.cst) and 

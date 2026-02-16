@@ -3,7 +3,7 @@ const { PNG } = require('pngjs');
 const fs = require('fs');
 const BaseExtractor = require('../extractor/BaseExtractor');
 const DataStream = require('../utils/DataStream');
-const { Bitmap, MemberType, HeaderSize } = require('../Constants');
+const { Bitmap, MemberType, HeaderSize, Resources } = require('../Constants');
 const { Palette } = require('../utils/Palette');
 
 const BitDepth = {
@@ -125,7 +125,9 @@ class BitmapExtractor extends BaseExtractor {
                 const imgData = PNG.sync.write(dst);
 
                 if (outputPath) {
-                    return await this.saveFile(imgData, outputPath, Resources.Labels.Bitmap);
+                    const result = await this.saveFile(imgData, outputPath, Resources.Labels.Bitmap);
+                    if (result) result.format = Resources.Formats.PNG;
+                    return result;
                 }
                 return imgData;
             } catch (e) {

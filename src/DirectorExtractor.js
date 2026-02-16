@@ -1,5 +1,5 @@
 /**
- * @version 1.3.8
+ * @version 1.3.9
  * DirectorExtractor - Orchestrates extraction of Director RIFX files.
  * Robust discovery architecture with regional palette resolution.
  */
@@ -295,8 +295,23 @@ class DirectorExtractor extends BaseExtractor {
         // Consolidation: Add global contexts to metadata
         this.metadata.movie = this.metadataManager.movieConfig || {};
         this.metadata.castLibs = this.castLibs;
+
+        const finalMembers = this.members.filter(m => {
+            // Filter out empty slots (Type 0 with no descriptive name)
+            const typeName = CastMember.getTypeName(m.typeId);
+            return !(typeName === 'Null' && (!m.name || m.name.startsWith('member_')));
+        });
+
+        // Re-calculate stats based on final members
+        this.stats.total = finalMembers.length;
+        this.stats.byType = {};
+        for (const m of finalMembers) {
+            const t = CastMember.getTypeName(m.typeId);
+            this.stats.byType[t] = (this.stats.byType[t] || 0) + 1;
+        }
+
         this.metadata.stats = this.stats;
-        this.metadata.members = this.members.map(m => m.toJSON());
+        this.metadata.members = finalMembers.map(m => m.toJSON());
 
         this.saveJSON();
         this.saveLog();

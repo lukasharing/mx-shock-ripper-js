@@ -1,5 +1,5 @@
 /**
- * @version 1.3.7
+ * @version 1.3.9
  * CastMember.js - Metadata & geometric state for a single Cast Member
  */
 
@@ -79,6 +79,7 @@ class CastMember {
 
     static getTypeName(typeId) {
         const typeMap = {
+            [MemberType.Null]: 'Null',
             [MemberType.Bitmap]: 'Bitmap',
             [MemberType.FilmLoop]: 'FilmLoop',
             [MemberType.Text]: 'Text',
@@ -274,6 +275,7 @@ class CastMember {
         return Object.fromEntries(
             Object.entries(obj).filter(([k, v]) => {
                 if (['id', 'name', 'type'].includes(k)) return true;
+                if (k === 'type' && (v === 'Null' || v === 'Unknown(0)')) return false;
                 return v !== null && v !== undefined && v !== '';
             })
         );
