@@ -505,6 +505,19 @@ class Palette {
     }
 
     /**
+     * Normalizes a raw palette ID from the Director binary format.
+     * Applies the standard -1 offset for system palette references (<= 0).
+     * 0 -> -1 (Mac System), -1 -> -2 (Rainbow), -2 -> -3 (Grayscale), etc.
+     * Positive IDs (custom cast palettes) are returned unchanged.
+     * @param {number} id - Raw palette ID from CASt or DRCF chunk
+     * @returns {number}
+     */
+    static normalizePaletteId(id) {
+        if (id <= 0) return id - 1;
+        return id;
+    }
+
+    /**
      * Fundamentals: Traces the palette reference chain across members (borrowing).
      * @param {Object} member - The member requesting the palette.
      * @param {Object} extractor - The extractor context.
@@ -518,6 +531,7 @@ class Palette {
         if (visited.size > 10) return null;
 
         let linkId = targetId;
+        let castLibId = member.clutCastLib || 0;
 
         // If no explicit ID provided, determine from member
         if (linkId === null) {
@@ -604,13 +618,22 @@ class Palette {
 
         // 5. Cross-Cast Reference (Project Context)
         if (extractor && extractor.projectContext) {
-            const externalMember = await extractor.projectContext.getMember(linkId);
+            // Priority: Explicit clutCastLib, then linkId if it looks like a cross-cast reference
+            if (extractor.log) extractor.log('DEBUG', `[Palette] Attempting cross-cast lookup for ID ${linkId} in CastLib ${castLibId}`);
+            const externalMember = await extractor.projectContext.getMember(linkId, castLibId);
             if (externalMember) {
                 if (externalMember.typeId === 4 || externalMember.type === 'Palette' || externalMember.format === 'pal') {
                     const data = externalMember.palette?.data || externalMember.palette || externalMember.data;
                     const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
                     if (pal) {
-                        member.palette = { id: externalMember.id, name: externalMember.name, castlib: externalMember.castlibName, traced: true, resolution: 'cross-cast' };
+                        member.palette = {
+                            id: externalMember.id,
+                            name: externalMember.name,
+                            castlib: externalMember.castlibName || 'external',
+                            traced: true,
+                            resolution: 'cross-cast',
+                            castLibId: castLibId
+                        };
                         return pal;
                     }
                 } else if (externalMember.typeId === 1 || externalMember.type === 'Bitmap') {
@@ -676,14 +699,14 @@ class Palette {
      * Resolves the correct palette for a member based on its properties and project context.
      */
     static async resolveMemberPalette(member, extractor) {
-        const { name, platform } = member;
+        // Platform comes from extractor options, not the member object
+        const platform = extractor?.options?.platform || 'Macintosh';
 
         // --- PHASE 1: Fundamental Overrides ---
-
-        // 1-bit images are strictly Black/White.
         if (member.bitDepth === 1) {
-            return PALETTES.MAC;
+            return [[255, 255, 255], [0, 0, 0]];
         }
+
 
         // --- PHASE 2: Canonical Resolution ---
 
@@ -709,39 +732,10 @@ class Palette {
         const tracedPal = await this.tracePaletteChain(member, extractor, platform, logicalPaletteId);
         if (tracedPal) return tracedPal;
 
-        // --- PHASE 4: Generalized Fallback for unresolvable IDs ---
-        // If a specific ID was requested (> 0) but didn't resolve to a known palette,
-        // and we have an internal palette, use the first one.
-        // This handles cases like Habbo's localized palette ID 99 or 1 references
-        // where the ILS/Slot map is incomplete or non-standard.
-        if (logicalPaletteId > 0 && extractor?.members) {
-            const internalPals = extractor.members.filter(m => m.typeId === 4);
-            if (internalPals.length > 0) {
-                const firstPal = internalPals[0];
-                const palData = firstPal.palette ? (firstPal.palette.data || firstPal.palette) : null;
-                const pal = palData ? (Array.isArray(palData) ? palData : this.parseDirector(palData)) : null;
-                if (pal) {
-                    member.palette = {
-                        id: firstPal.id,
-                        name: firstPal.name,
-                        castlib: 'internal',
-                        resolution: 'generalized-fallback',
-                        originalId: logicalPaletteId
-                    };
-                    return pal;
-                }
-            }
-        }
+        // (Phase 4 removed: unreliable first-palette fallback caused wrong palette picks.
+        //  Let unresolved IDs fall through to Phase 5 nearest-preceding heuristic.)
 
         // --- PHASE 5: Heuristics & Specific Fallbacks ---
-
-        // 32-bit images are technically palette-less (true color), but Director often 
-        // assigns a palette anyway. If resolution fails, use the system standard.
-        if (member.bitDepth === 32) {
-            const sysId = (platform === 'Windows' ? -101 : -1);
-            member.palette = { id: sysId, name: "System Fallback (32-bit)", castlib: 'system', fallback: true };
-            return this.getSystemPaletteById(sysId, platform);
-        }
 
         // Contextual Search: Preceding Palette in same cast
         // In Director, unresolved palette IDs (0/null) inherit from the nearest preceding
@@ -766,7 +760,7 @@ class Palette {
             }
         }
 
-        // --- PHASE 5: Ultimate Fallback ---
+        // --- PHASE 6: Ultimate Fallback ---
         const defaultId = (platform === 'Windows' ? -101 : -1);
         member.palette = { id: defaultId, name: "System Fallback", castlib: 'system', fallback: true };
         return this.getSystemPaletteById(defaultId, platform);

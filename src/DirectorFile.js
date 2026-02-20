@@ -1,5 +1,5 @@
 /**
- * @version 1.4.0
+ * @version 1.4.1
  * DirectorFile.js - Core logic for parsing .dcr and .cct files.
  */
 
@@ -163,7 +163,7 @@ class DirectorFile {
         }
     }
 
-    async _parseILS() {
+    _parseILS() {
         const ds = this.ds;
         ds.seek(8);
         const magic = ds.readFourCC(); // ILS 
@@ -176,9 +176,12 @@ class DirectorFile {
             this.log('WARNING', `Absurd ILS chunk count: ${count}. Retrying with swapped endianness.`);
             this.ds.endianness = this.ds.endianness === 'big' ? 'little' : 'big';
             ds.seek(8 + 4 + 4);
-            // Re-read count
             const count2 = ds.readUint32();
-            // If still absurd, we're stuck
+            if (count2 > 0xFFFF) {
+                this.log('ERROR', `ILS chunk count unrecoverable: ${count2}. Skipping ILS.`);
+                return;
+            }
+            count = count2;
         }
 
         for (let i = 0; i < count; i++) {

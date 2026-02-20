@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const DirectorFile = require('../DirectorFile');
 const CastMember = require('../CastMember');
 const DataStream = require('../utils/DataStream');
+const { Palette } = require('../utils/Palette');
 const { Magic, AfterburnerTags, MemberType, Offsets, KeyTableValues } = require('../Constants');
 
 class MetadataManager {
@@ -12,6 +13,29 @@ class MetadataManager {
         this.nameTable = {};
         this.lctxMap = {};
         this.castList = []; // Implicit Slot Order from Key Table
+    }
+
+    /**
+     * Calculates a global hash for the cast library based on member count and key table entries.
+     * Used for incremental extraction to detect if a cast lib has likely changed.
+     */
+    calculateCastHash() {
+        const hash = crypto.createHash('sha256');
+        const keys = Object.keys(this.keyTable).sort((a, b) => a - b);
+        for (const castId of keys) {
+            const map = this.keyTable[castId];
+            const tags = Object.keys(map).sort();
+            hash.update(`${castId}:`);
+            for (const tag of tags) {
+                hash.update(`${tag}=${map[tag]},`);
+            }
+        }
+        // Also hash the name table if available
+        if (this.nameTable && Object.keys(this.nameTable).length > 0) {
+            const names = Object.values(this.nameTable).join('|');
+            hash.update(names);
+        }
+        return hash.digest('hex');
     }
 
     async parseKeyTable() {
@@ -90,9 +114,6 @@ class MetadataManager {
             // Capture Cast Sort Order (Implicit Slot ID)
             // Slot indices are 1-based (i+1)
             this.castList[i + 1] = castID;
-
-            // Populate ILS (Initial Load Segment) mapping from KEY* table
-            this.lctxMap[i + 1] = sectionID;
         }
 
         const lctxChunks = this.extractor.dirFile.chunks.filter(c => {
@@ -137,6 +158,7 @@ class MetadataManager {
                         ds.readUint16();
 
                         if (sectionId > -1) {
+                            this.extractor.log('DEBUG', `LCTX Entry ${i} -> Section ${sectionId}`);
                             this.lctxMap[i] = sectionId;
                         }
                     }
@@ -193,7 +215,6 @@ class MetadataManager {
                     slotIndex++;
                     continue;
                 }
-                // Map physical ID (sectionId) to castID
                 const memberId = this.resToMember[sectionId] || sectionId;
                 this.extractor.castOrder[slotIndex] = memberId;
                 slotIndex++;
@@ -218,55 +239,54 @@ class MetadataManager {
      * @returns {number|null} - The section ID of the palette, or null if not found
      */
     resolvePaletteId(paletteId) {
-        if (paletteId === 0) return null;
-
-        let targetId = null;
-        let source = 'none';
+        if (!paletteId) return null;
 
         // Director Palette Resolution Logic:
-        // Member logical IDs start at minMember (typically 1 or 4 in legacy variants).
-        // Formula: SlotIndex = paletteId - minMember + 1
+        // Member logical IDs can be referenced in three ways:
+        // 1. Direct Member ID (KeyTable lookup)
+        // 2. Logical Slot Index (paletteId - minMember + 1)
+        // 3. Physical Slot Index (Direct use of paletteId as slot)
+
+        const checkMember = (id) => {
+            const map = this.keyTable[id];
+            if (map && (map[Magic.CLUT] || map[Magic.clut_lower] || map[Magic.Palt] || map[Magic.palt_lower])) {
+                return id;
+            }
+            return null;
+        };
+
+        // 1. Direct KeyTable Match (Highest Priority)
+        let resolved = checkMember(paletteId);
+        if (resolved) return resolved;
+
+        // 2. Logical Slot Index Mapping (minMember offset)
         const minMember = (this.movieConfig && this.movieConfig.minMember !== undefined) ? this.movieConfig.minMember : 1;
         const slotIndex = paletteId - minMember + 1;
 
-        // 1. Try Cast Order Map (MCsL / CAS*) - Primary Authority
-        if (this.extractor.castOrder && slotIndex >= 0 && slotIndex < this.extractor.castOrder.length) {
-            const memberId = this.extractor.castOrder[slotIndex];
-            const map = this.keyTable[memberId];
-
-            const isPalette = map && (map[Magic.CLUT] || map[Magic.clut_lower] || map[Magic.Palt] || map[Magic.palt_lower]);
-            if (isPalette) {
-                targetId = memberId;
-                source = `CastOrder(Slot ${slotIndex}, ID ${memberId})`;
-            }
+        if (this.extractor.castOrder && slotIndex > 0 && slotIndex < this.extractor.castOrder.length) {
+            resolved = checkMember(this.extractor.castOrder[slotIndex]);
+            if (resolved) return resolved;
         }
 
-        // 2. Try LctX map (logical index match) - Fallback ILS lookup
-        if (!targetId && this.lctxMap[paletteId]) {
+        // 3. Fallback: Try paletteId as a direct Physical Slot Index
+        if (this.extractor.castOrder && paletteId > 0 && paletteId < this.extractor.castOrder.length) {
+            resolved = checkMember(this.extractor.castOrder[paletteId]);
+            if (resolved) return resolved;
+        }
+
+        // [Ambiguity Fix] If paletteId is very small (e.g. 1-16) and and castOrder[paletteId] 
+        // yields a Member with a different ID, it's likely a Slot Index reference.
+        // If it still fails, check the lctxMap which often bridges the gap in Afterburner.
+
+        // 4. LctX map lookup (Legacy fallback)
+        if (this.lctxMap[paletteId]) {
             const sectionId = this.lctxMap[paletteId];
             const memberId = this.resToMember[sectionId] || sectionId;
-            const map = this.keyTable[memberId];
-
-            const isPalette = map && (map[Magic.CLUT] || map[Magic.clut_lower] || map[Magic.Palt] || map[Magic.palt_lower]);
-            if (isPalette) {
-                targetId = memberId;
-                source = 'ILS/LCTX (CLUT)';
-            }
+            resolved = checkMember(memberId);
+            if (resolved) return resolved;
         }
 
-        // 3. Try keyTable (cast ID match) - Direct link
-        if (!targetId && this.keyTable[paletteId]) {
-            const sectionID = this.keyTable[paletteId][Magic.CLUT] ||
-                this.keyTable[paletteId][Magic.clut_lower] ||
-                this.keyTable[paletteId][Magic.Palt] ||
-                this.keyTable[paletteId][Magic.palt_lower];
-            if (sectionID) {
-                targetId = paletteId;
-                source = 'KeyTable';
-            }
-        }
-
-        return targetId;
+        return null;
     }
 
 
@@ -352,10 +372,8 @@ class MetadataManager {
             // ScummVM logic: If ID <= 0, it refers to a built-in platform palette.
             ds.seek(30);
             let paletteId = ds.readInt16();
-
-            if (paletteId <= 0) {
-                paletteId -= 1;
-            }
+            // Normalize built-in palette IDs via centralized helper
+            paletteId = Palette.normalizePaletteId(paletteId);
 
             this.movieConfig = {
                 minMember,

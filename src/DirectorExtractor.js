@@ -1,5 +1,5 @@
 /**
- * @version 1.4.0
+ * @version 1.4.1
  * DirectorExtractor - Orchestrates extraction of Director RIFX files.
  * Robust discovery architecture with regional palette resolution.
  */
@@ -66,7 +66,7 @@ class DirectorExtractor extends BaseExtractor {
         this.castLibs = [];
         this.sharedPalettes = {};
         this.defaultMoviePalette = null;
-        this.stats = { total: 0, extracted: 0, failed: 0, byType: {} };
+        this.stats = { total: 0, processed: 0, extracted: 0, skipped: 0, failed: 0, byType: {} };
         this.metadata = {};
 
         // Sub-Extractor Instances
@@ -137,7 +137,9 @@ class DirectorExtractor extends BaseExtractor {
         for (const member of this.members) {
             if (member.typeId === MemberType.Palette) {
                 const map = this.metadataManager.keyTable[member.id];
-                await this.memberProcessor.processPalette(member, map);
+                if (map) {
+                    await this.memberProcessor.processPalette(member, map);
+                }
             }
         }
 
@@ -148,26 +150,25 @@ class DirectorExtractor extends BaseExtractor {
             Magic.CAST, Magic.CAS_STAR, Magic.CArT, Magic.cast_lower,
             Magic.BITD, Magic.DIB, Magic.dib_star, Magic.bitd_lower,
             Magic.STXT, Magic.stxt_lower, Magic.TXTS,
-            Magic.SND, Magic.snd_lower, Magic.snd_star
+            Magic.SND, Magic.snd_lower, Magic.snd_star,
+            Magic.VCSH // VectorShape content tag
         ];
 
         const processQueue = this.members.filter(m => {
             if (m.typeId === MemberType.Palette) return false;
 
-            const map = this.metadataManager.keyTable[m.id];
-            if (!map) return false;
+            const map = this.metadataManager.keyTable[m.id] || {};
+            const isLctxScript = m.typeId === MemberType.Script && m.scriptId > 0;
 
-            // Strict Content Check:
-            // We only process members that either have their "primary" chunk (BITD, LSCR, etc.)
-            // OR at least one of the known content tags (DIB, STXT, etc.).
-            // This prevents flooding with phantom/Thum-only members.
+            if (Object.keys(map).length === 0 && !isLctxScript) return false;
+
             const primaryTag = this.getPrimaryTagForType(m.typeId);
             const hasPrimary = primaryTag && map[primaryTag];
 
             const tags = Object.keys(map);
             const hasContent = tags.some(t => contentTags.includes(t));
 
-            if (!hasPrimary && !hasContent) {
+            if (!hasPrimary && !hasContent && !isLctxScript) {
                 if (this.options.verbose) {
                     this.log('DEBUG', `Skipping member ${m.id} (${m.name}): no content chunks found (Tags: ${tags.join(', ')})`);
                 }
@@ -176,35 +177,35 @@ class DirectorExtractor extends BaseExtractor {
 
             return true;
         });
-        const workers = [];
-        const taskQueue = [...processQueue];
-        let completedCount = 0;
 
         // Initialize persistent workers with accurate ILS offsets
         const ilsOffsets = {};
         if (this.dirFile.isAfterburned && this.dirFile.ilsBodyOffset > 0) {
-            const ilsChunk = this.dirFile.chunks.find(c => c.type === Magic.ILS || c.id === 2);
+            const ilsChunk = this.dirFile.chunks.find(c => DirectorFile.unprotect(c.type) === Magic.ILS || c.id === 2);
             if (ilsChunk) {
-                const ilsData = await this.dirFile.getChunkData(ilsChunk);
-                if (ilsData) {
-                    const ds = new DataStream(ilsData, this.dirFile.ds.endianness);
-                    let currentPos = this.dirFile.ilsBodyOffset;
-                    while (ds.position < ds.length) {
-                        const resId = ds.readVarInt();
-                        const chunk = this.dirFile.chunks.find(c => c.id === resId);
-                        if (chunk) {
-                            ilsOffsets[resId] = currentPos;
-                            if (resId === 4361 || resId === 1024) {
-                                console.log(`[DirectorExtractor][DEBUG] Found ILS offset for ${resId}: ${currentPos}`);
-                            }
-                            currentPos += chunk.len;
-                        } else {
-                            break;
-                        }
+                const data = await this.dirFile.getChunkData(ilsChunk);
+                if (data) {
+                    const ds = new DataStream(data, 'little');
+                    ds.seek(12);
+                    const ilsCount = ds.readUint32();
+                    ds.seek(21);
+                    for (let i = 0; i < ilsCount; i++) {
+                        if (ds.position + 12 > data.length) break;
+                        ds.skip(4); // Tag
+                        ds.skip(4); // Len
+                        const off = ds.readUint32();
+                        ilsOffsets[i] = this.dirFile.ilsBodyOffset + off;
                     }
+                    this.log('DEBUG', `Recovered ${Object.keys(ilsOffsets).length} offsets from ILS table.`);
                 }
             }
         }
+
+        const currentMembersJSON = path.join(this.outputDir, 'members.json');
+
+        const workers = [];
+        const taskQueue = [...processQueue];
+        let remaining = processQueue.length;
 
         for (let i = 0; i < this.concurrency; i++) {
             const worker = new Worker(path.join(__dirname, 'extractor', 'ExtractionWorker.js'), {
@@ -212,103 +213,151 @@ class DirectorExtractor extends BaseExtractor {
                     fd: this.dirFile.fd,
                     keyTable: this.metadataManager.keyTable,
                     nameTable: this.metadataManager.nameTable,
-                    chunks: this.dirFile.chunks.map(c => ({
-                        ...c,
-                        physicalOffset: ilsOffsets[c.id] || (this.dirFile.isAfterburned ? (this.dirFile.ilsBodyOffset + c.off) : (c.off + 8))
-                    })),
+                    chunks: this.dirFile.chunks.map((c, idx) => {
+                        // Use ILS table for physical offset if afterburned and c.off is a valid index,
+                        // otherwise fall back to relative calculation.
+                        const physOff = (this.dirFile.isAfterburned && ilsOffsets[c.off] !== undefined)
+                            ? ilsOffsets[c.off]
+                            : (this.dirFile.isAfterburned ? (this.dirFile.ilsBodyOffset + c.off) : (c.off + 8));
+
+                        return {
+                            ...c,
+                            physicalOffset: physOff
+                        };
+                    }),
                     fmap: this.dirFile.fmap || {},
+                    lctxMap: this.metadataManager.lctxMap || {},
+                    castOrder: this.castOrder || [],
+                    movieConfig: this.metadataManager.movieConfig || {},
+                    resToMember: this.metadataManager.resToMember || {},
                     isAfterburned: this.dirFile.isAfterburned,
                     ilsBodyOffset: this.dirFile.ilsBodyOffset,
-                    options: { verbose: this.options.verbose, lasm: this.options.lasm }
+                    options: {
+                        verbose: this.options.verbose,
+                        lasm: this.options.lasm,
+                        force: !!this.options.force
+                    }
                 }
             });
-
-            worker.on('error', (err) => this.log('ERROR', `Worker ${i} error: ${err.message}`));
-            worker.on('exit', (code) => {
-                if (code !== 0 && !this._isStopping) this.log('ERROR', `Worker ${i} stopped with exit code ${code}`);
-            });
-
-            workers.push({ thread: worker, busy: false });
+            workers.push(worker);
+        }
+        this.metadataStore = {};
+        if (fs.existsSync(currentMembersJSON)) {
+            try {
+                const prevData = JSON.parse(fs.readFileSync(currentMembersJSON, 'utf8'));
+                if (prevData.members) {
+                    for (const m of prevData.members) {
+                        this.metadataStore[m.id] = { checksum: m.checksum };
+                    }
+                }
+            } catch (e) {
+                this.log('DEBUG', 'Could not load existing members.json for incremental check.');
+            }
         }
 
-        await new Promise((resolve) => {
-            const distributeTasks = async () => {
-                if (completedCount === processQueue.length) {
-                    resolve();
-                    return;
-                }
+        await new Promise((resolve, reject) => {
+            if (remaining === 0) return resolve();
 
-                for (const workerObj of workers) {
-                    if (!workerObj.busy && taskQueue.length > 0) {
-                        const member = taskQueue.shift();
-                        workerObj.busy = true;
+            const onWorkerMessage = async (worker, msg) => {
+                if (msg.type === 'LOG') {
+                    this.log(msg.level, `[Worker] ${msg.message}`);
+                } else if (msg.type === 'DONE') {
+                    const m = this.members.find(mem => mem.id === msg.id);
+                    if (m) {
+                        m.checksum = msg.checksum;
+                        m.scriptFile = msg.scriptFile;
+                        m.width = msg.width;
+                        m.height = msg.height;
+                        m.format = msg.format;
 
-                        const outPathPrefix = path.join(this.outputDir, (member.name || `member_${member.id}`).replace(/[/\\?%*:|"<>]/g, '_'));
-                        const finalPalette = await Palette.resolveMemberPalette(member, this);
-
-                        const task = {
-                            member: {
-                                id: member.id,
-                                name: member.name,
-                                typeId: member.typeId,
-                                width: member.width,
-                                height: member.height,
-                                bitDepth: member.bitDepth,
-                                _initialRect: member._initialRect
-                            },
-                            outPathPrefix,
-                            palette: finalPalette
-                        };
-
-                        const onMessage = (msg) => {
-                            if (msg.type === 'log') {
-                                this.log(msg.lvl, msg.msg);
-                            } else if (msg.type === 'result' && msg.memberId === member.id) {
-                                if (msg.result) {
-                                    member.image = msg.result.file || msg.result.path;
-                                    member.format = msg.result.format;
-                                    if (msg.result.width) member.width = msg.result.width;
-                                    if (msg.result.height) member.height = msg.result.height;
-                                    if (msg.result.checksum) member.checksum = msg.result.checksum;
-                                }
-                                workerObj.busy = false;
-                                workerObj.thread.off('message', onMessage);
-                                completedCount++;
-                                distributeTasks();
-                            } else if (msg.type === 'error' && msg.memberId === member.id) {
-                                this.log('ERROR', `Worker error for ${member.id}: ${msg.error}`);
-                                // Fallback Assignment: Ensure member has a format even on failure
-                                if (!member.format) {
-                                    if (member.typeId === MemberType.Bitmap) member.format = Resources.Formats.PNG;
-                                    else if (member.typeId === MemberType.Script) member.format = Resources.Formats.LS;
-                                    else if (member.typeId === MemberType.Text) member.format = Resources.Formats.RTF;
-                                }
-                                workerObj.busy = false;
-                                workerObj.thread.off('message', onMessage);
-                                completedCount++;
-                                distributeTasks();
-                            }
-                        };
-
-                        workerObj.thread.on('message', onMessage);
-                        workerObj.thread.postMessage(task);
+                        if (this.metadataStore) {
+                            this.metadataStore[m.id] = { checksum: m.checksum };
+                        }
+                    }
+                    this.stats.processed++;
+                    remaining--;
+                    if (taskQueue.length > 0) {
+                        sendTask(worker, taskQueue.shift());
+                    } else if (remaining === 0) {
+                        resolve();
+                    }
+                } else if (msg.type === 'SKIP') {
+                    this.log('INFO', `Skipping member ${msg.id} (unchanged)`);
+                    this.stats.skipped++;
+                    remaining--;
+                    if (taskQueue.length > 0) {
+                        sendTask(worker, taskQueue.shift());
+                    } else if (remaining === 0) {
+                        resolve();
+                    }
+                } else if (msg.type === 'ERROR') {
+                    this.log('ERROR', `Worker error for member ${msg.id}: ${msg.message}`);
+                    remaining--;
+                    if (taskQueue.length > 0) {
+                        sendTask(worker, taskQueue.shift());
+                    } else if (remaining === 0) {
+                        resolve();
                     }
                 }
             };
-            distributeTasks();
+
+            const sendTask = async (worker, member) => {
+                const outPathPrefix = path.join(this.outputDir, (member.name || `member_${member.id}`).replace(/[/\\?%*:|"<>]/g, '_'));
+
+                // Resolve palette on the main thread where extractor.members is live
+                let resolvedPalette = null;
+                if (member.typeId === MemberType.Bitmap || member.typeId === MemberType.Shape) {
+                    resolvedPalette = await Palette.resolveMemberPalette(member, this) || null;
+                }
+
+                worker.postMessage({
+                    type: 'PROCESS',
+                    member: {
+                        id: member.id,
+                        name: member.name,
+                        typeId: member.typeId,
+                        scriptId: member.scriptId,
+                        scriptType: member.scriptType,
+                        flags: member.flags,
+                        ilsIndex: member._ilsIndex,
+                        width: member.width,
+                        height: member.height,
+                        bitDepth: member.bitDepth,
+                        paletteId: member.paletteId,
+                        clutCastLib: member.clutCastLib,
+                        _castFlags: member._castFlags,
+                        _initialRect: member._initialRect
+                    },
+                    outPathPrefix,
+                    knownChecksum: this.metadataStore[member.id]?.checksum,
+                    palette: resolvedPalette
+                });
+            };
+
+            for (const worker of workers) {
+                worker.on('message', (msg) => onWorkerMessage(worker, msg));
+                worker.on('error', (err) => {
+                    this.log('ERROR', `Worker thread error: ${err.message}`);
+                    reject(err);
+                });
+
+                if (taskQueue.length > 0) {
+                    sendTask(worker, taskQueue.shift());
+                }
+            }
         });
 
         // Terminate persistent workers
         this._isStopping = true;
-        for (const w of workers) w.thread.terminate();
+        for (const w of workers) w.terminate();
 
-        this.log('SUCCESS', `Processed ${completedCount}/${processQueue.length} members successfully.`);
+        this.log('SUCCESS', `Processed ${this.stats.processed} members.`);
 
         // Phase 5: Cleanup & Finalization
         await this.matchDanglingScripts();
         this.finalizeCastLibs();
 
-        // Final Clean Pass: Ensure NO member has a null format
+        // Final Clean Pass
         for (const member of this.members) {
             if (!member.format) {
                 if (member.typeId === MemberType.Bitmap) member.format = Resources.Formats.PNG;
@@ -320,17 +369,13 @@ class DirectorExtractor extends BaseExtractor {
             }
         }
 
-        // Consolidation: Add global contexts to metadata
         this.metadata.movie = this.metadataManager.movieConfig || {};
         this.metadata.castLibs = this.castLibs;
-
         const finalMembers = this.members.filter(m => {
-            // Filter out empty slots (Type 0 with no descriptive name)
             const typeName = CastMember.getTypeName(m.typeId);
             return !(typeName === 'Null' && (!m.name || m.name.startsWith('member_')));
         });
 
-        // Re-calculate stats based on final members
         this.stats.total = finalMembers.length;
         this.stats.byType = {};
         for (const m of finalMembers) {
@@ -344,8 +389,8 @@ class DirectorExtractor extends BaseExtractor {
         this.saveJSON();
         this.saveLog();
 
-        this.dirFile.close();
-        this.log('SUCCESS', `Extraction complete. Extracted ${this.members.length} members. Output: ${this.outputDir}`);
+        if (this.dirFile) this.dirFile.close();
+        this.log('SUCCESS', `Extraction complete. Output: ${this.outputDir}`);
         return { path: this.outputDir, stats: this.stats };
     }
 
@@ -378,51 +423,66 @@ class DirectorExtractor extends BaseExtractor {
     }
 
     async matchDanglingScripts() {
-        const scripts = this.members.filter(m => m.typeId === MemberType.Script && !m.scriptFile);
+        const scripts = this.members.filter(m => m.typeId === MemberType.Script && !m.format);
+        if (scripts.length === 0) return;
         const lscrChunks = this.dirFile.chunks.filter(c => c.type === Magic.LSCR && !this.metadataManager.resToMember[c.id]);
+        if (lscrChunks.length === 0) return;
 
-        if (scripts.length > 0 && lscrChunks.length > 0) {
-            for (let i = 0; i < Math.min(scripts.length, lscrChunks.length); i++) {
-                const data = await this.dirFile.getChunkData(lscrChunks[i]);
+        const matchedChunkIds = new Set();
+
+        // Pass 1: Match via lctxMap (reliable — by scriptId or member id)
+        for (const script of scripts) {
+            const lscrId = (script.scriptId > 0 && this.metadataManager.lctxMap[script.scriptId])
+                ? this.metadataManager.lctxMap[script.scriptId]
+                : this.metadataManager.lctxMap[script.id];
+            if (!lscrId) continue;
+
+            const chunk = lscrChunks.find(c => c.id === lscrId);
+            if (!chunk || matchedChunkIds.has(chunk.id)) continue;
+            matchedChunkIds.add(chunk.id);
+
+            const data = await this.dirFile.getChunkData(chunk);
+            if (!data) continue;
+
+            const decompiled = this.lingoDecompiler.decompile(data, this.metadataManager.nameTable, script.scriptType || 0, script.id, { lasm: this.options.lasm });
+            const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
+            if (source) {
+                const lsPath = path.join(this.outputDir, `${script.name}.ls`);
+                fs.writeFileSync(lsPath, source);
+                if (this.options.lasm && typeof decompiled === 'object' && decompiled.lasm) {
+                    fs.writeFileSync(path.join(this.outputDir, `${script.name}.lasm`), decompiled.lasm);
+                }
+                script.format = Resources.Formats.LS;
+            }
+        }
+
+        // Pass 2: Positional fallback for remaining unmatched (last resort)
+        const unmatchedScripts = scripts.filter(s => !s.format);
+        const unmatchedChunks = lscrChunks.filter(c => !matchedChunkIds.has(c.id));
+        if (unmatchedScripts.length > 0 && unmatchedChunks.length > 0) {
+            this.log('WARNING', `matchDanglingScripts: positional fallback for ${unmatchedScripts.length} unresolved scripts`);
+            for (let i = 0; i < Math.min(unmatchedScripts.length, unmatchedChunks.length); i++) {
+                const data = await this.dirFile.getChunkData(unmatchedChunks[i]);
                 if (!data) continue;
-
-                const decompiled = this.lingoDecompiler.decompile(data, this.metadataManager.nameTable, 0, scripts[i].id, { lasm: this.options.lasm });
+                const decompiled = this.lingoDecompiler.decompile(data, this.metadataManager.nameTable, unmatchedScripts[i].scriptType || 0, unmatchedScripts[i].id, { lasm: this.options.lasm });
                 const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
                 if (source) {
-                    const lsPath = path.join(this.outputDir, `${scripts[i].name}.ls`);
+                    const lsPath = path.join(this.outputDir, `${unmatchedScripts[i].name}.ls`);
                     fs.writeFileSync(lsPath, source);
                     if (this.options.lasm && typeof decompiled === 'object' && decompiled.lasm) {
-                        fs.writeFileSync(path.join(this.outputDir, `${scripts[i].name}.lasm`), decompiled.lasm);
+                        fs.writeFileSync(path.join(this.outputDir, `${unmatchedScripts[i].name}.lasm`), decompiled.lasm);
                     }
-                    if (this.options.saveLsc) {
-                        fs.writeFileSync(path.join(this.outputDir, `${scripts[i].name}.lsc`), data);
-                    }
-                    scripts[i].format = Resources.Formats.LS;
+                    unmatchedScripts[i].format = Resources.Formats.LS;
                 }
             }
         }
     }
 
-    getCastLibHash(castLibIndex, algorithm = 'sha256') {
-        const libMembers = this.members
-            .filter(m => (m.id >> 16) + 1 === castLibIndex)
-            .sort((a, b) => {
-                // Use checksum for order-independent hashing (Set Consensus)
-                // Fallback to ID if checksum is missing (phantom members)
-                if (a.checksum && b.checksum) return a.checksum.localeCompare(b.checksum);
-                return a.id - b.id;
-            });
-        if (libMembers.length === 0) return crypto.createHash(algorithm).update('').digest('hex');
-        const compositeChecksum = libMembers.map(m => m.checksum || m.id).join('');
-        return crypto.createHash(algorithm).update(compositeChecksum).digest('hex');
-    }
 
     finalizeCastLibs() {
         if (this.castLibs.length === 0) return;
-        for (const castLib of this.castLibs) castLib.checksum = this.getCastLibHash(castLib.index);
         fs.writeFileSync(path.join(this.outputDir, 'castlibs.json'), JSON.stringify({ casts: this.castLibs }, null, 2));
     }
-
 }
 
 module.exports = DirectorExtractor;

@@ -127,7 +127,7 @@ class CastManager {
                 else if (tag === Magic.SHAP) initialType = MemberType.Shape;
                 else if (tag === Magic.XTRA || tag === Magic.XTCL) initialType = MemberType.Xtra;
                 else if (tag === Magic.FONT || tag === Magic.VWFT) initialType = MemberType.Font;
-                else if (tag === Magic.manL) initialType = MemberType.Palette; // manL is name table, but usually associated with palette members in some variants
+                else if (tag === Magic.manL) initialType = MemberType.Null; // manL is an Afterburner LNAM (name table) chunk, not a palette
 
                 member = new CastMember(memberId, null, {
                     name: `member_${memberId}`,

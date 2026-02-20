@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { MemberType, Magic, AfterburnerTags, LingoConfig } = require('../Constants');
+const { MemberType, Magic, AfterburnerTags, LingoConfig, Resources } = require('../Constants');
 
 class ScriptHandler {
     constructor(extractor) {
@@ -18,9 +18,9 @@ class ScriptHandler {
             if (res) {
                 // Only set format if it's the primary script or no format exists yet
                 if (!member.format || member.typeId === MemberType.Script) {
-                    member.format = 'ls';
+                    member.format = Resources.Formats.LS;
                 }
-                return { format: 'ls', length: res.scriptLength };
+                return { format: Resources.Formats.LS, length: res.scriptLength };
             }
             return null;
         }
@@ -81,11 +81,14 @@ class ScriptHandler {
         let lscrId = 0;
         let source = null;
 
+        this.extractor.log('DEBUG', `Resolving Lscr for ${member.name} (id:${member.id}, scriptId:${member.scriptId})`);
         if (member.scriptId > 0 && this.extractor.metadataManager.lctxMap[member.scriptId]) {
             lscrId = this.extractor.metadataManager.lctxMap[member.scriptId];
+            this.extractor.log('DEBUG', `Resolved ${member.name} -> Lscr ${lscrId} via LctxMap[scriptId: ${member.scriptId}]`);
             source = 'Lscr (LctX)';
         } else if (member.id > 0 && this.extractor.metadataManager.lctxMap[member.id]) {
             lscrId = this.extractor.metadataManager.lctxMap[member.id];
+            this.extractor.log('DEBUG', `Resolved ${member.name} -> Lscr ${lscrId} via LctxMap[id: ${member.id}] (Fallback)`);
             source = 'Lscr (LctX)';
         }
 
@@ -94,6 +97,7 @@ class ScriptHandler {
                 if (!key) continue;
                 lscrId = key[Magic.LSCR] || key[AfterburnerTags.rcsL] || key['Lscr'] || key['rcsL'];
                 if (lscrId) {
+                    this.extractor.log('DEBUG', `Resolved ${member.name} -> Lscr ${lscrId} via KeyTable`);
                     source = 'Lscr (KeyTable)';
                     break;
                 }
@@ -102,6 +106,7 @@ class ScriptHandler {
 
         if (!lscrId && member.scriptChunkId) {
             lscrId = member.scriptChunkId;
+            this.extractor.log('DEBUG', `Resolved ${member.name} -> Lscr ${lscrId} via Heuristic (scriptChunkId)`);
             source = 'Lscr (Heuristic)';
         }
 
@@ -160,14 +165,14 @@ class ScriptHandler {
             }
 
             return {
-                format: 'ls',
+                format: Resources.Formats.LS,
                 length: decompiledText.length
             };
         } else {
             this.extractor.log('WARNING', `Member ID ${member.id}: Decompilation failed.`);
 
             return {
-                format: 'lsc',
+                format: Resources.Formats.LSC || 'lsc',
                 length: lscrData.length
             };
         }

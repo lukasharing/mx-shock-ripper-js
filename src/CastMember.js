@@ -1,5 +1,5 @@
 /**
- * @version 1.4.0
+ * @version 1.4.1
  * CastMember.js - Metadata & geometric state for a single Cast Member
  */
 
@@ -7,6 +7,7 @@ const DataStream = require('./utils/DataStream');
 const { MemberType, Offsets } = require('./Constants');
 const Specs = require('./member/MemberSpec');
 const DirectorFile = require('./DirectorFile');
+const { Palette } = require('./utils/Palette');
 
 class CastMember {
     constructor(id, chunk, properties = {}) {
@@ -34,6 +35,7 @@ class CastMember {
         this.comment = properties.comment || null;
         this.bitDepth = properties.bitDepth || 8;
         this.format = properties.format || null;
+        this.clutCastLib = properties.clutCastLib || 0;
 
         // Internal Tracking Properties (Post-Processed)
         this.width = properties.width || 0;
@@ -105,6 +107,17 @@ class CastMember {
             [MemberType.Unknown_2049]: 'Unknown (Type 2049)'
         };
         return typeMap[typeId] || `Unknown(${typeId})`;
+    }
+
+    static getScriptTypeTag(scriptType) {
+        // Director script type values:
+        // 0 = Movie script (legacy/unnamed global)
+        // 1 = Behavior script (sprite-attached)
+        // 2 = Parent script (OOP class)
+        // 3 = Movie script (modern global/module)
+        // 7 = Cast-level script (legacy D4)
+        const tags = { 0: 'movie', 1: 'behavior', 2: 'parent', 3: 'movie', 7: 'cast' };
+        return tags[scriptType] || `script-${scriptType}`;
     }
 
     static fromChunk(id, buffer, preferredEndianness = 'big') {
@@ -210,10 +223,9 @@ class CastMember {
 
                 if (i === 5 && item.length >= 2) {
                     let pid = item.readInt16BE(0);
-                    // Normalize built-in palette IDs (-1 offset)
-                    // 0 -> -1 (Mac), -1 -> -2 (Rainbow), -2 -> -3 (Grayscale)
-                    if (pid <= 0) pid -= 1;
-                    res.paletteId = pid;
+                    // Normalize built-in palette IDs via centralized helper
+                    // 0 -> -1 (Mac System), -1 -> -2 (Rainbow), -2 -> -3 (Grayscale)
+                    res.paletteId = Palette.normalizePaletteId(pid);
                 }
                 if (i === 6 && item.length >= 2) res.bitDepth = item.readInt16BE(0);
             }
@@ -247,9 +259,11 @@ class CastMember {
             id: this.id,
             name: this.name,
             type: this.type,
+            typeId: this.typeId,
             num: this.num, // If available
             modified: this.modified,
             loaded: this.loaded, // If available
+            checksum: this.checksum,
             format: this.format
         };
 
@@ -261,11 +275,14 @@ class CastMember {
         // Type-Specific Attributes
         switch (this.typeId) {
             case MemberType.Bitmap: // 1
+                if (this._castFlags) result._castFlags = this._castFlags;
+                if (this._initialRect) result._initialRect = this._initialRect;
                 if (this.width) result.width = this.width;
                 if (this.height) result.height = this.height;
                 if (this.regPoint) result.regPoint = this.regPoint;
                 if (this.bitDepth) result.bitDepth = this.bitDepth;
-                if (this.paletteId > 0) result.paletteId = this.paletteId;
+                if (this.paletteId !== 0) result.paletteId = this.paletteId;
+                if (this.clutCastLib !== undefined && this.clutCastLib !== 0) result.clutCastLib = this.clutCastLib;
                 break;
 
             case MemberType.Shape: // 2
@@ -280,8 +297,7 @@ class CastMember {
                 break;
 
             case MemberType.Script: // 11
-                result.scriptType = this.scriptType;
-                if (this.scriptId) result.scriptId = this.scriptId;
+                result.scriptType = CastMember.getScriptTypeTag(this.scriptType);
                 break;
 
             case MemberType.Text: // 3

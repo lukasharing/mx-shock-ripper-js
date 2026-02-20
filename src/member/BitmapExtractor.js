@@ -40,16 +40,41 @@ class BitmapExtractor extends BaseExtractor {
             dimSets.push({ w: mw, h: mh, source: 'Metadata' });
         }
 
-        // 2. Decompression methods
-        const zlibBuf = this._tryZlib(bitmapBuf);
-        const methods = [
-            { name: 'Raw', data: bitmapBuf },
-            { name: 'PackBits', data: this.decodePackBits(bitmapBuf) },
-            { name: 'Zlib', data: zlibBuf }
-        ];
-        if (zlibBuf && zlibBuf.length > 0) {
-            methods.push({ name: 'Zlib+PackBits', data: this.decodePackBits(zlibBuf) });
-        }
+        // 2. Decompression cache
+        const cache = {
+            raw: bitmapBuf,
+            pb: null,
+            zlib: null,
+            zpb: null,
+            zlibAttempted: false
+        };
+
+        const getMethodData = (name) => {
+            if (name === 'Raw') return cache.raw;
+            if (name === 'PackBits') {
+                if (cache.pb === null) cache.pb = this.decodePackBits(bitmapBuf);
+                return cache.pb;
+            }
+            if (name === 'Zlib') {
+                if (!cache.zlibAttempted) {
+                    cache.zlib = this._tryZlib(bitmapBuf);
+                    cache.zlibAttempted = true;
+                }
+                return cache.zlib;
+            }
+            if (name === 'Zlib+PackBits') {
+                if (!cache.zlibAttempted) {
+                    cache.zlib = this._tryZlib(bitmapBuf);
+                    cache.zlibAttempted = true;
+                }
+                if (!cache.zlib) return null;
+                if (cache.zpb === null) cache.zpb = this.decodePackBits(cache.zlib);
+                return cache.zpb;
+            }
+            return null;
+        };
+
+        const methodNames = ['Raw', 'PackBits', 'Zlib', 'Zlib+PackBits'];
 
         const declaredDepth = member.bitDepth || 8;
         const depths = [32, 16, 8, 4, 1, 2];
@@ -59,18 +84,18 @@ class BitmapExtractor extends BaseExtractor {
 
         // 3. Robust Trial Loop
         // We prioritize the DECLARED depth as the outermost loop.
-        // This prevents false matches at 4-bit when 8-bit PackBits decoded is the real intended result.
         for (const d of orderedDepths) {
-            for (const method of methods) {
-                if (!method.data || method.data.length === 0) continue;
-                const actualLen = method.data.length;
+            for (const name of methodNames) {
+                const data = getMethodData(name);
+                if (!data || data.length === 0) continue;
+                const actualLen = data.length;
 
                 for (const dims of dimSets) {
                     const baseRowBytes = Math.ceil(dims.w * d / 8);
                     for (const align of alignments) {
                         const rb = Math.ceil(baseRowBytes / align) * align;
                         if (rb * dims.h === actualLen) {
-                            return this._doExtract(method.data, dims.w, dims.h, d, rb, member, customPalette, alphaBuf, outputPath);
+                            return this._doExtract(data, dims.w, dims.h, d, rb, member, customPalette, alphaBuf, outputPath);
                         }
                     }
                 }
@@ -78,7 +103,6 @@ class BitmapExtractor extends BaseExtractor {
         }
 
         // 4. Special Case: Row-Based PackBits (Legacy variants)
-        // We also prioritize the declared depth here
         for (const d of orderedDepths) {
             for (const dims of dimSets) {
                 const baseRowBytes = Math.ceil(dims.w * d / 8);
@@ -86,8 +110,9 @@ class BitmapExtractor extends BaseExtractor {
                 for (const align of alignments) {
                     const rb = Math.ceil(baseRowBytes / align) * align;
                     // Try Row-Based PackBits on raw and zlib decompressed
+                    const zlibData = getMethodData('Zlib');
                     const rowSources = [{ name: 'PackBitsRows', data: bitmapBuf }];
-                    if (zlibBuf) rowSources.push({ name: 'PackBitsRows(Zlib)', data: zlibBuf });
+                    if (zlibData) rowSources.push({ name: 'PackBitsRows(Zlib)', data: zlibData });
 
                     for (const src of rowSources) {
                         const rowResult = this.decompressPackBitsRows(src.data, rb, dims.h);
@@ -119,7 +144,7 @@ class BitmapExtractor extends BaseExtractor {
 
         for (const order of orders) {
             try {
-                const chunkyData = this._processChunkyData(data, width, height, depth, rowBytes, palette, alphaBuf, order);
+                const chunkyData = this._processChunkyData(data, width, height, depth, rowBytes, palette, alphaBuf, order, member);
                 const dst = new PNG({ width, height, colorType: 6, inputHasAlpha: true });
                 dst.data = chunkyData;
                 const imgData = PNG.sync.write(dst);
@@ -152,7 +177,7 @@ class BitmapExtractor extends BaseExtractor {
         return null;
     }
 
-    _processChunkyData(pixelData, width, height, depth, rowBytes, palette, alphaBuf, channelOrder = 'ARGB') {
+    _processChunkyData(pixelData, width, height, depth, rowBytes, palette, alphaBuf, channelOrder = 'ARGB', member = {}) {
         const dst = Buffer.alloc(width * height * 4);
 
         if (!palette && depth <= 8) {
@@ -169,7 +194,13 @@ class BitmapExtractor extends BaseExtractor {
                     const dstIdx = (y * width + x) * 4;
                     for (let c = 0; c < 4; c++) {
                         const char = layout[c];
-                        const val = pixelData[rowBase + (planeWidth * c) + x] || 0;
+                        let val = pixelData[rowBase + (planeWidth * c) + x] || 0;
+
+                        if (char === 'A') {
+                            const hasAlpha = (member._castFlags & Bitmap.Flags.AlphaChannelUsed) !== 0;
+                            if (!hasAlpha) val = 255;
+                        }
+
                         if (char === 'R') dst[dstIdx] = val;
                         else if (char === 'G') dst[dstIdx + 1] = val;
                         else if (char === 'B') dst[dstIdx + 2] = val;
@@ -187,7 +218,13 @@ class BitmapExtractor extends BaseExtractor {
                 const dstIdx = i * 4;
                 for (let c = 0; c < 4; c++) {
                     const char = layout[c];
-                    const val = pixelData[planeSize * c + i] || 0;
+                    let val = pixelData[planeSize * c + i] || 0;
+
+                    if (char === 'A') {
+                        const hasAlpha = (member._castFlags & Bitmap.Flags.AlphaChannelUsed) !== 0;
+                        if (!hasAlpha) val = 255;
+                    }
+
                     if (char === 'R') dst[dstIdx] = val;
                     else if (char === 'G') dst[dstIdx + 1] = val;
                     else if (char === 'B') dst[dstIdx + 2] = val;
@@ -230,6 +267,9 @@ class BitmapExtractor extends BaseExtractor {
                         if (channelOrder === Bitmap.ChannelOrder.ARGB) { a = b1; r = b2; g = b3; b = b4; }
                         else if (channelOrder === Bitmap.ChannelOrder.RGBA) { r = b1; g = b2; b = b3; a = b4; }
                         else if (channelOrder === Bitmap.ChannelOrder.BGRA) { b = b1; g = b2; r = b3; a = b4; }
+
+                        const hasAlpha = (member._castFlags & Bitmap.Flags.AlphaChannelUsed) !== 0;
+                        if (!hasAlpha) a = 255;
                     }
                 } else if (depth === 16) {
                     const idx = rowStart + x * 2;
@@ -262,25 +302,27 @@ class BitmapExtractor extends BaseExtractor {
                     rowDataLen = data.readUInt16BE(inPos);
                     inPos += 2;
                 }
-                if (inPos + rowDataLen > data.length) break;
-                const rowEnd = inPos + rowDataLen;
+                const rowEnd = Math.min(inPos + rowDataLen, data.length);
                 const rowStart = outPos;
-                while (inPos < rowEnd && (outPos - rowStart) < rowBytes) {
+                const rowLimit = rowStart + rowBytes;
+
+                while (inPos < rowEnd && outPos < rowLimit) {
                     const n = data.readInt8(inPos++);
                     if (n >= 0) {
                         const count = n + 1;
-                        for (let i = 0; i < count && inPos < rowEnd && (outPos - rowStart) < rowBytes; i++) {
-                            out[outPos++] = data[inPos++];
-                            actualLen++;
-                        }
+                        const toCopy = Math.min(count, rowEnd - inPos, rowLimit - outPos);
+                        data.copy(out, outPos, inPos, inPos + toCopy);
+                        outPos += toCopy;
+                        inPos += toCopy;
+                        actualLen += toCopy;
                     } else if (n !== -128) {
                         const count = -n + 1;
                         if (inPos < rowEnd) {
                             const val = data[inPos++];
-                            for (let i = 0; i < count && (outPos - rowStart) < rowBytes; i++) {
-                                out[outPos++] = val;
-                                actualLen++;
-                            }
+                            const toFill = Math.min(count, rowLimit - outPos);
+                            out.fill(val, outPos, outPos + toFill);
+                            outPos += toFill;
+                            actualLen += toFill;
                         }
                     }
                 }
@@ -288,28 +330,48 @@ class BitmapExtractor extends BaseExtractor {
                 outPos = rowStart + rowBytes;
             }
             return { data: out, actualLen: actualLen };
-        } catch (e) { return { data: out, actualLen: actualLen }; }
+        } catch (e) {
+            return { data: out, actualLen: actualLen };
+        }
     }
 
     decodePackBits(data) {
-        const out = [];
+        // PackBits can expand, but typical expansion is small. 
+        // We use a growth strategy to avoid huge array allocations.
+        let out = Buffer.allocUnsafe(data.length * 2);
+        let outPos = 0;
         let inPos = 0;
+
+        const ensureCapacity = (additional) => {
+            if (outPos + additional > out.length) {
+                const newOut = Buffer.allocUnsafe(Math.max(out.length * 2, outPos + additional));
+                out.copy(newOut, 0, 0, outPos);
+                out = newOut;
+            }
+        };
+
         try {
             while (inPos < data.length) {
                 const n = data.readInt8(inPos++);
                 if (n >= 0) {
                     const count = n + 1;
-                    for (let i = 0; i < count && inPos < data.length; i++) out.push(data[inPos++]);
+                    ensureCapacity(count);
+                    const toCopy = Math.min(count, data.length - inPos);
+                    data.copy(out, outPos, inPos, inPos + toCopy);
+                    outPos += toCopy;
+                    inPos += toCopy;
                 } else if (n !== -128) {
                     const count = -n + 1;
                     if (inPos < data.length) {
                         const val = data[inPos++];
-                        for (let i = 0; i < count; i++) out.push(val);
+                        ensureCapacity(count);
+                        out.fill(val, outPos, outPos + count);
+                        outPos += count;
                     }
                 }
             }
         } catch (e) { }
-        return Buffer.from(out);
+        return out.slice(0, outPos);
     }
 }
 

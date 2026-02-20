@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const DataStream = require('../utils/DataStream');
 const { Resources } = require('../Constants');
 
@@ -21,7 +22,8 @@ class BaseExtractor {
             }
             this.log('DEBUG', `[BaseExtractor] Writing ${buffer.length} bytes to ${outputPath} (Type: ${type})`);
             fs.writeFileSync(outputPath, buffer);
-            return { success: true, file: path.basename(outputPath), path: outputPath, format: type };
+            const checksum = crypto.createHash('sha256').update(buffer).digest('hex');
+            return { success: true, file: path.basename(outputPath), path: outputPath, format: type, checksum };
         } catch (e) {
             this.log('ERROR', `Failed to save ${type} to ${outputPath}: ${e.message}`);
             return null;

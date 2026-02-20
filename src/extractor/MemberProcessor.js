@@ -5,7 +5,7 @@ const { Palette } = require('../utils/Palette');
 const { Color } = require('../utils/Color');
 
 /**
- * @version 1.4.0
+ * @version 1.4.1
  * MemberProcessor.js - Centralized orchestration for member-specific extraction logic.
  * Handles chunk-to-member mapping and delegates to specialized extractors.
  */

@@ -12,9 +12,9 @@ class DataStream {
             this.length = length;
             this.buffer = null;
         } else {
-            this.buffer = source;
+            this.buffer = (source instanceof Buffer) ? source : (source ? Buffer.from(source) : null);
             this.fd = null;
-            this.length = source ? source.length : 0;
+            this.length = (this.buffer && this.buffer.length) ? this.buffer.length : 0;
         }
         this.position = 0;
         this.endianness = endianness;
@@ -99,7 +99,11 @@ class DataStream {
 
     readUint32() {
         const buf = this._readIntoBuf(4);
-        return this.endianness === 'little' ? buf.readUInt32LE(0) : buf.readUInt32BE(0);
+        if (this.endianness === 'little') {
+            return (buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24)) >>> 0;
+        } else {
+            return ((buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3]) >>> 0;
+        }
     }
 
     readFourCC() {

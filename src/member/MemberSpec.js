@@ -1,5 +1,5 @@
 /**
- * @version 1.4.0
+ * @version 1.4.1
  * MemberSpec.js - Type-specific binary metadata parsers
  */
 
@@ -29,15 +29,20 @@ class BitmapSpec {
             }
         }
 
-        let clutCastLib = -1;
+        let clutCastLib = 0;
         let clutId = 0;
 
         if (len >= 28 && (isColor || ds.position + 4 <= startPos + len)) {
             clutCastLib = ds.readInt16(); // Offset 24
             clutId = ds.readInt16();      // Offset 26
 
+            // Normalize clutCastLib: -1 often means "Current Cast" (Habbo behavior)
+            if (clutCastLib === -1) clutCastLib = 0;
+
             // Normalize built-in palette IDs (-1 offset)
-            if (clutId <= 0) {
+            // 0 -> -1 (Mac), -1 -> -2 (Rainbow), etc.
+            // Only normalize if it's a system palette reference (clutCastLib === 0)
+            if (clutId <= 0 && clutCastLib === 0) {
                 clutId -= 1;
             }
         }

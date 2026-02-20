@@ -1,5 +1,5 @@
 /**
- * @version 1.4.0
+ * @version 1.4.1
  * LingoDecompiler.js
  * 
  * High-performance Lingo bytecode decompiler using a multi-phase 
@@ -43,8 +43,8 @@ class LingoDecompiler {
      */
     decompile(lscrData, nameTable, externalScriptType = 0, memberId = 0, options = {}) {
         try {
-            if (lscrData.length < 132) {
-                return options.lasm ? { source: "-- Script buffer too small/encrypted", lasm: "" } : "-- Script buffer too small/encrypted";
+            if (!lscrData || lscrData.length < 132) {
+                return options.lasm ? { source: "-- Script buffer too small/empty", lasm: "" } : "-- Script buffer too small/empty";
             }
             const endianness = options.endianness || 'big';
             const stream = new DataStream(lscrData, endianness);
@@ -668,7 +668,7 @@ class LingoDecompiler {
                     }
                 } break;
 
-            case 'jmpifz': case 'jmp_if_z':
+            case 'jmpifz': case 'jmp_if_z': {
                 const blockEnd = bc.pos + bc.len + bc.obj, condVal = stack.pop();
                 if (ctx.activeCase && condVal instanceof AST.BinaryOperator && condVal.op === '=') {
                     const branch = new AST.CaseBranch([condVal.right]);
@@ -676,12 +676,31 @@ class LingoDecompiler {
                     ctx.activeCase.addBranch(branch);
                     ast.enterBlock(branch.block);
                 } else {
-                    const ifNode = new AST.IfStatement(0, condVal);
-                    ifNode.block1.endPos = blockEnd;
-                    ast.addStatement(ifNode);
-                    ast.enterBlock(ifNode.block1);
+                    // Detect repeat-while: look for endrepeat before blockEnd
+                    let isRepeatWhile = false;
+                    for (let j = ctx.index + 1; j < ctx.codes.length; j++) {
+                        const futureBc = ctx.codes[j];
+                        if (futureBc.pos >= blockEnd) break;
+                        if (futureBc.opcode === 'endrepeat') {
+                            isRepeatWhile = true;
+                            break;
+                        }
+                    }
+
+                    if (isRepeatWhile) {
+                        const repeatNode = new AST.RepeatWhileStatement(condVal);
+                        repeatNode.block.endPos = blockEnd;
+                        ast.addStatement(repeatNode);
+                        ast.enterBlock(repeatNode.block);
+                    } else {
+                        const ifNode = new AST.IfStatement(0, condVal);
+                        ifNode.block1.endPos = blockEnd;
+                        ast.addStatement(ifNode);
+                        ast.enterBlock(ifNode.block1);
+                    }
                 }
                 break;
+            }
 
             case 'jmp':
                 const jumpTarget = bc.pos + bc.len + bc.obj, nextBc = ctx.codes[ctx.index + 1];
@@ -712,6 +731,11 @@ class LingoDecompiler {
                         ast.addStatement(ctx.activeCase);
                     }
                 }
+                break;
+
+            case 'endrepeat':
+                // endrepeat jumps back to the loop condition; the block exit is handled
+                // by the position-based block closing logic in the main loop.
                 break;
 
             case 'newobj':
