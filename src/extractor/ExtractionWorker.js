@@ -30,12 +30,13 @@ const logProxy = (lvl, msg, memberId) => {
 };
 
 // Autonomous Data Accessor (Simplified version of DirectorFile logic for Worker)
-// O(1) chunk lookup map built once at startup
+// O(1) Performance Optimization (Fixes v1.4.2 regression)
+// We use a Map for O(1) lookups instead of O(n) find/filter.
+// Critical: We MUST allow later chunks (like ABMP) to overwrite earlier 
+// ones (like MMAP placeholders) to support Afterburned/Hybrid files.
 const chunkMap = new Map();
 for (const chunk of chunks) {
-    // Use fmap to resolve logical → physical ID
-    const physicalId = (fmap && fmap[chunk.id] !== undefined) ? fmap[chunk.id] : chunk.id;
-    if (!chunkMap.has(physicalId)) chunkMap.set(physicalId, chunk);
+    chunkMap.set(chunk.id, chunk);
 }
 
 const getChunkById = (id) => {
@@ -46,11 +47,17 @@ const getChunkById = (id) => {
 const getChunkData = async (chunk) => {
     if (!chunk) return null;
     try {
-        const physicalOffset = chunks[chunk.ilsIndex]?.physicalOffset || chunk.physicalOffset;
+        // Use pre-calculated physicalOffset from DirectorExtractor
+        const physicalOffset = chunk.physicalOffset;
         if (!physicalOffset) return null;
 
-        const buf = Buffer.alloc(chunk.len);
-        fs.readSync(fd, buf, 0, chunk.len, physicalOffset);
+        const buf = Buffer.allocUnsafe(chunk.len);
+        const bytesRead = fs.readSync(fd, buf, 0, chunk.len, physicalOffset);
+        if (bytesRead < chunk.len) {
+            logProxy('WARN', `Truncated read for chunk ${chunk.id}: expected ${chunk.len}, got ${bytesRead}`);
+            // Safety zero-fill remainder if truncated
+            buf.fill(0, bytesRead);
+        }
 
         let data = buf;
         // Robust decompression trail: zlib -> raw -> raw+offset
@@ -177,7 +184,7 @@ parentPort.on('message', async (task) => {
 
         // [Incremental] Fast Content Hashing
         let contentHash = '';
-        if (data) {
+        if (data && !workerOptions.skipChecksum) {
             const hash = crypto.createHash('sha256');
             hash.update(data);
             contentHash = hash.digest('hex');

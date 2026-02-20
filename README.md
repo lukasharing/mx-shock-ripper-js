@@ -1,5 +1,5 @@
 # mx-shock-ripper-js
-![Version](https://img.shields.io/badge/version-1.4.1-blue)
+![Version](https://img.shields.io/badge/version-1.4.2-blue)
 ![Build](https://img.shields.io/badge/build-stable-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -58,7 +58,7 @@ npm install mx-shock-ripper-js
 The library includes a universal CLI (`mx-rip`) for rapid extraction.
 
 #### Command Help
-mx-shock-ripper-js - Production Grade Director Asset Ripper v1.4.1
+mx-shock-ripper-js - Production Grade Director Asset Ripper v1.4.2
 
 Usage:
   mx-rip <input_file> [output_dir] [options]

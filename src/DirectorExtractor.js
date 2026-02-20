@@ -1,12 +1,12 @@
 /**
- * @version 1.4.1
+ * @version 1.4.2
  * DirectorExtractor - Orchestrates extraction of Director RIFX files.
  * Robust discovery architecture with regional palette resolution.
  */
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
+const os = require('os');
 const { Worker } = require('worker_threads');
 
 const DirectorFile = require('./DirectorFile');
@@ -34,8 +34,7 @@ const MovieExtractor = require('./member/MovieExtractor');
 const DataStream = require('./utils/DataStream');
 
 const { MemberType, Magic, Resources } = require('./Constants');
-const { Palette, PALETTES } = require('./utils/Palette');
-const { Color } = require('./utils/Color');
+const { Palette } = require('./utils/Palette');
 const Logger = require('./utils/Logger');
 
 class DirectorExtractor extends BaseExtractor {
@@ -46,7 +45,7 @@ class DirectorExtractor extends BaseExtractor {
         this.castOrder = [];
         this.projectType = 'standard';
         this.options = options;
-        this.concurrency = options.concurrency || 8;
+        this.concurrency = os.cpus().length || 1;
 
         this.logger = new Logger('DirectorExtractor', (lvl, msg) => {
             this.extractionLog.push({ timestamp: new Date().toISOString(), lvl, msg });
@@ -77,10 +76,10 @@ class DirectorExtractor extends BaseExtractor {
         this.scriptExtractor = new ScriptExtractor(logProxy);
         this.soundExtractor = new SoundExtractor(logProxy);
         this.shapeExtractor = new ShapeExtractor(logProxy);
-        this.fontExtractor = new FontExtractor(logProxy);
+        this.fontExtractor = new FontExtractor(logProxy, this);
         this.genericExtractor = new GenericExtractor(logProxy);
         this.lingoDecompiler = new LingoDecompiler(logProxy, this);
-        this.lnamParser = new LnamParser(logProxy);
+        this.lnamParser = new LnamParser(logProxy, this);
         this.vectorShapeExtractor = new VectorShapeExtractor(logProxy);
         this.movieExtractor = new MovieExtractor(logProxy);
     }
@@ -207,24 +206,29 @@ class DirectorExtractor extends BaseExtractor {
         const taskQueue = [...processQueue];
         let remaining = processQueue.length;
 
+        const workerChunks = [];
+        for (const c of this.dirFile.chunks) {
+            const physOff = (this.dirFile.isAfterburned && ilsOffsets[c.off] !== undefined)
+                ? ilsOffsets[c.off]
+                : (this.dirFile.isAfterburned ? (this.dirFile.ilsBodyOffset + c.off) : (c.off + 8));
+
+            workerChunks.push({
+                id: c.id,
+                len: c.len,
+                physicalOffset: physOff,
+                compType: c.compType,
+                uncompLen: c.uncompLen,
+                type: DirectorFile.unprotect(c.type)
+            });
+        }
+
         for (let i = 0; i < this.concurrency; i++) {
             const worker = new Worker(path.join(__dirname, 'extractor', 'ExtractionWorker.js'), {
                 workerData: {
                     fd: this.dirFile.fd,
                     keyTable: this.metadataManager.keyTable,
                     nameTable: this.metadataManager.nameTable,
-                    chunks: this.dirFile.chunks.map((c, idx) => {
-                        // Use ILS table for physical offset if afterburned and c.off is a valid index,
-                        // otherwise fall back to relative calculation.
-                        const physOff = (this.dirFile.isAfterburned && ilsOffsets[c.off] !== undefined)
-                            ? ilsOffsets[c.off]
-                            : (this.dirFile.isAfterburned ? (this.dirFile.ilsBodyOffset + c.off) : (c.off + 8));
-
-                        return {
-                            ...c,
-                            physicalOffset: physOff
-                        };
-                    }),
+                    chunks: workerChunks,
                     fmap: this.dirFile.fmap || {},
                     lctxMap: this.metadataManager.lctxMap || {},
                     castOrder: this.castOrder || [],
@@ -235,12 +239,14 @@ class DirectorExtractor extends BaseExtractor {
                     options: {
                         verbose: this.options.verbose,
                         lasm: this.options.lasm,
-                        force: !!this.options.force
+                        force: !!this.options.force,
+                        fast: !!this.options.fast
                     }
                 }
             });
             workers.push(worker);
         }
+
         this.metadataStore = {};
         if (fs.existsSync(currentMembersJSON)) {
             try {
@@ -254,6 +260,14 @@ class DirectorExtractor extends BaseExtractor {
                 this.log('DEBUG', 'Could not load existing members.json for incremental check.');
             }
         }
+
+        // Phase 4.1: Parallel Palette Resolution
+        this.log('INFO', `Resolving palettes for ${processQueue.length} members in parallel...`);
+        await Promise.all(processQueue.map(async (member) => {
+            if (member.typeId === MemberType.Bitmap || member.typeId === MemberType.Shape) {
+                member._resolvedPalette = await Palette.resolveMemberPalette(member, this) || null;
+            }
+        }));
 
         await new Promise((resolve, reject) => {
             if (remaining === 0) return resolve();
@@ -304,12 +318,6 @@ class DirectorExtractor extends BaseExtractor {
             const sendTask = async (worker, member) => {
                 const outPathPrefix = path.join(this.outputDir, (member.name || `member_${member.id}`).replace(/[/\\?%*:|"<>]/g, '_'));
 
-                // Resolve palette on the main thread where extractor.members is live
-                let resolvedPalette = null;
-                if (member.typeId === MemberType.Bitmap || member.typeId === MemberType.Shape) {
-                    resolvedPalette = await Palette.resolveMemberPalette(member, this) || null;
-                }
-
                 worker.postMessage({
                     type: 'PROCESS',
                     member: {
@@ -330,7 +338,7 @@ class DirectorExtractor extends BaseExtractor {
                     },
                     outPathPrefix,
                     knownChecksum: this.metadataStore[member.id]?.checksum,
-                    palette: resolvedPalette
+                    palette: member._resolvedPalette
                 });
             };
 
@@ -477,7 +485,6 @@ class DirectorExtractor extends BaseExtractor {
             }
         }
     }
-
 
     finalizeCastLibs() {
         if (this.castLibs.length === 0) return;

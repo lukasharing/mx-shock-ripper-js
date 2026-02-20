@@ -1,5 +1,5 @@
 /**
- * @version 1.4.1
+ * @version 1.4.2
  * Color.js - Color utilities and index resolution
  */
 

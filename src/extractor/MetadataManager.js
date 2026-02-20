@@ -1,3 +1,6 @@
+/**
+ * @version 1.4.2
+ */
 const crypto = require('crypto');
 const DirectorFile = require('../DirectorFile');
 const CastMember = require('../CastMember');
@@ -39,10 +42,8 @@ class MetadataManager {
     }
 
     async parseKeyTable() {
-        const keyChunk = this.extractor.dirFile.chunks.find(c => {
-            const unprot = DirectorFile.unprotect(c.type).toUpperCase();
-            return unprot === Magic.KEY.toUpperCase() || unprot === Magic.KEY_SPACE.trim().toUpperCase();
-        });
+        const keyChunks = this.extractor.dirFile.getChunksByType(Magic.KEY).concat(this.extractor.dirFile.getChunksByType('KEY '));
+        const keyChunk = keyChunks[0];
         if (!keyChunk) return;
 
         const data = await this.extractor.dirFile.getChunkData(keyChunk);
@@ -116,12 +117,7 @@ class MetadataManager {
             this.castList[i + 1] = castID;
         }
 
-        const lctxChunks = this.extractor.dirFile.chunks.filter(c => {
-            const rawType = c.type;
-            const unprot = DirectorFile.unprotect(rawType).toUpperCase().trim();
-            if (unprot.includes(Magic.LCTX_UPPER) || unprot.includes(Magic.XTCL)) return true;
-            return false;
-        });
+        const lctxChunks = this.extractor.dirFile.getChunksByType(Magic.LCTX_UPPER).concat(this.extractor.dirFile.getChunksByType(Magic.XTCL));
         for (const chunk of lctxChunks) {
             const data = await this.extractor.dirFile.getChunkData(chunk);
             if (!data) {
@@ -171,10 +167,8 @@ class MetadataManager {
 
     async parseMCsL() {
         // Priority 1: Generic MCsL/abmc tag
-        let mcslChunk = this.extractor.dirFile.chunks.find(c => {
-            const unprot = DirectorFile.unprotect(c.type);
-            return unprot === Magic.MCsL || unprot === Magic.abmc;
-        });
+        let mcslChunks = this.extractor.dirFile.getChunksByType(Magic.MCsL).concat(this.extractor.dirFile.getChunksByType(Magic.abmc));
+        let mcslChunk = mcslChunks[0];
 
         let foundViaTag = null;
         // Priority 2: CAS* tag from KEY* table (Authoritative for Afterburner)
@@ -226,7 +220,8 @@ class MetadataManager {
     }
 
     async parseNameTable() {
-        const lnam = this.extractor.dirFile.chunks.find(c => c.type === Magic.LNAM || c.type === AfterburnerTags.manL);
+        const lnamChunks = this.extractor.dirFile.getChunksByType(Magic.LNAM).concat(this.extractor.dirFile.getChunksByType(AfterburnerTags.manL));
+        const lnam = lnamChunks[0];
         if (lnam) {
             const data = await this.extractor.dirFile.getChunkData(lnam);
             if (data) this.nameTable = this.extractor.lnamParser.parse(data, 'big');
@@ -241,36 +236,52 @@ class MetadataManager {
     resolvePaletteId(paletteId) {
         if (!paletteId) return null;
 
-        // Director Palette Resolution Logic:
-        // Member logical IDs can be referenced in three ways:
-        // 1. Direct Member ID (KeyTable lookup)
-        // 2. Logical Slot Index (paletteId - minMember + 1)
-        // 3. Physical Slot Index (Direct use of paletteId as slot)
+        /**
+         * [Director Logical Resolution Hierarchy]
+         * 1. Direct Member ID: If paletteId matches a KEY table entry for a Palette.
+         * 2. Logical Slot Index: paletteId - minMember + 1 (The base 1-based index).
+         * 3. Physical Slot Index: Direct use of paletteId as slot number (Safe for D4+).
+         * 4. CastList Fallback: Check implicit KEY order if MCsL is missing.
+         */
 
         const checkMember = (id) => {
             const map = this.keyTable[id];
-            if (map && (map[Magic.CLUT] || map[Magic.clut_lower] || map[Magic.Palt] || map[Magic.palt_lower])) {
+            if (map && (map[Magic.CLUT] || map[Magic.clut_lower] || map[Magic.Palt] || map[Magic.palt_lower] || map[Magic.PALT_UPPER])) {
                 return id;
             }
             return null;
         };
 
-        // 1. Direct KeyTable Match (Highest Priority)
-        let resolved = checkMember(paletteId);
-        if (resolved) return resolved;
-
-        // 2. Logical Slot Index Mapping (minMember offset)
         const minMember = (this.movieConfig && this.movieConfig.minMember !== undefined) ? this.movieConfig.minMember : 1;
         const slotIndex = paletteId - minMember + 1;
+        let resolved = null;
 
+        // 1. Logical Slot Index Mapping (Highest Priority in complex Projector contexts)
+        // If we have an explicit castOrder (MCsL), the paletteId usually refers to a slot.
         if (this.extractor.castOrder && slotIndex > 0 && slotIndex < this.extractor.castOrder.length) {
             resolved = checkMember(this.extractor.castOrder[slotIndex]);
+            if (resolved) {
+                return resolved;
+            }
+        }
+
+        // 2. Direct KeyTable Match (Direct physical ID access)
+        resolved = checkMember(paletteId);
+        if (resolved) return resolved;
+
+        // 3. Fallback to Implicit Cast List (if MCsL is missing)
+        if (this.castList && slotIndex > 0 && slotIndex < this.castList.length) {
+            resolved = checkMember(this.castList[slotIndex]);
             if (resolved) return resolved;
         }
 
-        // 3. Fallback: Try paletteId as a direct Physical Slot Index
+        // 4. Fallback: Try paletteId as a direct Physical Slot Index
         if (this.extractor.castOrder && paletteId > 0 && paletteId < this.extractor.castOrder.length) {
             resolved = checkMember(this.extractor.castOrder[paletteId]);
+            if (resolved) return resolved;
+        }
+        if (this.castList && paletteId > 0 && paletteId < this.castList.length) {
+            resolved = checkMember(this.castList[paletteId]);
             if (resolved) return resolved;
         }
 
@@ -349,10 +360,8 @@ class MetadataManager {
         return member;
     }
     async parseDRCF() {
-        const drcf = this.extractor.dirFile.chunks.find(c => {
-            const unprot = DirectorFile.unprotect(c.type);
-            return unprot === Magic.DRCF || unprot === Magic.VWCF || unprot === Magic.fgrD || unprot === 'fgrD';
-        });
+        const drcfChunks = [Magic.DRCF, Magic.VWCF, Magic.fgrD].flatMap(tag => this.extractor.dirFile.getChunksByType(tag));
+        const drcf = drcfChunks[0];
         if (!drcf) return;
 
         const data = await this.extractor.dirFile.getChunkData(drcf);

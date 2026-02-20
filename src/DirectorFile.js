@@ -1,5 +1,5 @@
 /**
- * @version 1.4.1
+ * @version 1.4.2
  * DirectorFile.js - Core logic for parsing .dcr and .cct files.
  */
 
@@ -30,6 +30,7 @@ class DirectorFile {
         this.fmap = null;
         this.subtype = null;
         this.isLittleEndianFile = false;
+        this.chunkIndex = {};
     }
 
     close() {
@@ -55,6 +56,13 @@ class DirectorFile {
     }
 
     async parse() {
+        /**
+         * Director Phase 1: Structural Discovery
+         * We support both standard RIFX (MMAP) and compressed Afterburner formats.
+         * For Afterburned files, standard catalogs are often encrypted or hidden,
+         * requiring a robust multi-pass search across potential catalog chunks.
+         */
+        this.log('DEBUG', `DirectorFile.parse: Starting parsing (Size: ${this.fileSize})`);
         if (!this.ds) return;
         const magic = this.ds.readFourCC();
         const size = this.ds.readUint32();
@@ -74,19 +82,39 @@ class DirectorFile {
         // Handle Afterburner variants:
         // FGDC (CCT), FGDM (DCR)
         // CDGF (byte-swapped FGDC), MDGF (byte-swapped FGDM)
-        const isAfterburner = [Magic.FGDC, Magic.FGDM, Magic.CDGF, Magic.MDGF].includes(magic) ||
+        this.isAfterburned = [Magic.FGDC, Magic.FGDM, Magic.CDGF, Magic.MDGF].includes(magic) ||
             [Magic.FGDC, Magic.FGDM, Magic.CDGF, Magic.MDGF].includes(internalMagic);
 
-        if (isAfterburner) {
-            this.isAfterburned = true;
+        if (magic === Magic.XFIR || magic === Magic.RIFX) {
+            // Standard RIFX container (might contain Afterburner internal stream)
+            await this.parseUncompressedStructure();
+            // Afterburned files require holistic structure calculation
+            // to find potentially fragmented or out-of-order catalogs (ABMP, FCDR, ILS).
+            await this.calculateAfterburnedStructure();
+        } else if (this.isAfterburned) {
+            // Direct Afterburner file (no RIFX wrapper, unusual but possible)
             this.format = 'afterburner';
             await this.calculateAfterburnedStructure();
-        } else if (magic === Magic.XFIR || magic === Magic.RIFX) {
-            // Uncompressed RIFX
-            await this.parseUncompressedStructure();
         } else {
             throw new Error(`Unsupported file format: ${magic}`);
         }
+
+        this._reindexChunks();
+    }
+
+    _reindexChunks() {
+        this.chunkIndex = {};
+        for (const c of this.chunks) {
+            const type = DirectorFile.unprotect(c.type).toUpperCase().trim();
+            if (!this.chunkIndex[type]) this.chunkIndex[type] = [];
+            this.chunkIndex[type].push(c);
+        }
+    }
+
+    getChunksByType(type) {
+        if (!type || typeof type !== 'string') return [];
+        const t = type.toUpperCase().trim();
+        return this.chunkIndex[t] || [];
     }
 
     async parseUncompressedStructure() {
@@ -112,13 +140,9 @@ class DirectorFile {
         }
 
         if (!mmapOff) {
-            // Check for ILS directly (protected casts often have this)
-            this.ds.seek(8);
-            const tag = this.ds.readFourCC();
-            if (tag === Magic.ILS || tag === Magic.ILS_REV) {
-                await this._parseILS();
-                return;
-            }
+            // Some protected casts have ILS but no standard mmap at the end.
+            // Check if we already found chunks in ILS; if not, and it's not Afterburned, then it's a failure.
+            if (this.chunks.length > 0 || this.isAfterburned) return;
             throw new Error(`Failed to locate Memory Map (mmap) in ${this.format} file.`);
         }
 
@@ -148,18 +172,18 @@ class DirectorFile {
                 link = this.ds.readInt32();
             }
 
-            if (off > 0) {
-                this.chunks.push({
-                    type: tag,
-                    len,
-                    off,
-                    id: i,
-                    uncompLen,
-                    compType,
-                    flags,
-                    link
-                });
-            }
+            // Do not skip chunks with off=0. In RIFX/Afterburner, these are often placeholders 
+            // that get resolved later (e.g. by ABMP), and we need them to maintain correct indexing.
+            this.chunks.push({
+                type: tag,
+                len,
+                off,
+                id: i,
+                uncompLen,
+                compType,
+                flags,
+                link
+            });
         }
     }
 
@@ -169,7 +193,7 @@ class DirectorFile {
         const magic = ds.readFourCC(); // ILS 
         const totalLen = ds.readUint32();
         const headerLen = ds.readUint32();
-        const count = ds.readUint32();
+        let count = ds.readUint32();
 
         if (count > 0xFFFF) {
             // Misread count likely means endianness issue in ILS chunk
@@ -192,15 +216,44 @@ class DirectorFile {
         }
     }
 
+    /**
+     * Holistic Afterburner Structure Discovery
+     * ----------------------------------------
+     * Standard Shockwave parsers often fail on modern Director files because
+     * they expect catalogs to be sequential. We use an exhaustive search
+     * for Afterburner-specific tags (ABMP, FCDR, ILS, PMBA, FGDC, etc.)
+     * and handle recursive container chunks (CDGF) used in large files.
+     */
     async calculateAfterburnedStructure() {
         try {
-            // FGDC structure: Fver, Fmap, Fcdr, Abmp, [Fgei + InlineStream]
-            // We search for these sequentially
-            await this._parseFver();
-            await this._parseFmap();
-            await this._parseFcdr();
-            await this._parseAbmp();
-            await this._parseFgei();
+            // Seek past the RIFX/FGDC header
+            this.ds.seek(12);
+
+            // Robust search for FGDC sub-chunks: Fver, Fmap, Fcdr, Abmp, Fgei
+            while (this.ds.position + 8 < this.ds.length) {
+                const tag = DirectorFile.unprotect(this.ds.peekFourCC());
+                if (tag === Magic.FVER) await this._parseFver();
+                else if (tag === Magic.FMAP) await this._parseFmap();
+                else if (tag === Magic.FCDR) await this._parseFcdr();
+                else if ([Magic.ABMP, Magic.PMBA].includes(tag) || tag.toUpperCase() === Magic.ABMP.toUpperCase()) await this._parseAbmp();
+                else if (tag === Magic.ILS || tag === Magic.ILS_REV) {
+                    this._parseILS();
+                } else if (tag === Magic.FGEI || tag === Magic.IEGF) {
+                    await this._parseFgei();
+                    break; // FGEI is followed by the Inline Stream (binary data), stop searching tags
+                } else if ([Magic.FGDC, Magic.FGDM, Magic.CDGF, Magic.MDGF].includes(tag)) {
+                    // Enter Afterburner container chunk
+                    this.ds.readFourCC(); // Skip tag
+                    this.ds.readUint32(); // Skip size (standard RIFX chunk size)
+                    // Continue loop inside the chunk
+                } else {
+                    // Skip unknown tag (some files have stray padding or metadata chunks)
+                    this.ds.skip(4);
+                    const len = this.ds.readVarInt();
+                    this.ds.skip(len);
+                }
+            }
+
             await this._autoDetectEndianness();
         } catch (e) {
             this.log('ERROR', `Failed to calculate afterburned structure: ${e.message}`);
@@ -278,9 +331,8 @@ class DirectorFile {
                 const len = fcdrDS.readUint32();
                 const off = fcdrDS.readUint32();
                 fcdrDS.readUint32(); // Unknown/Flags
-                if (off > 0) {
-                    this.chunks.push({ type: DirectorFile.unprotect(entryTag), len, off, id: i });
-                }
+                // Do not skip entries with off=0; they are part of the catalog indexing.
+                this.chunks.push({ type: DirectorFile.unprotect(entryTag), len, off, id: i });
             }
         }
     }

@@ -1,5 +1,5 @@
 /**
- * @version 1.4.1
+ * @version 1.4.2
  * Magic.js - FourCC identifiers and Magic numbers for Director chunks
  */
 
@@ -81,6 +81,7 @@ module.exports = {
     ILS_REV: ' ,i',
     // Afterburner Inline
     IEGF: 'IEGF',
+    fgrD: 'fgrD',
     // Junk/Free
     junk: 'junk',
     free: 'free'

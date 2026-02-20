@@ -1,3 +1,6 @@
+/**
+ * @version 1.4.2
+ */
 const path = require('path');
 const { Magic } = require('../Constants');
 const DirectorFile = require('../DirectorFile');
@@ -553,12 +556,14 @@ class Palette {
             return null;
         }
 
-        // --- NEW: ILS/Logical Resolution ---
-        // For D4+, linkId is often an index into the Initial Load Segment (ILS)
+        // --- NEW: Centralized Logical Resolution ---
+        // For D4+, linkId is often an index into the Initial Load Segment (ILS) or a Cast Slot.
+        // We delegate this to MetadataManager which handles minMember offsets and castList fallbacks.
+        // This ensures consistent resolution for complex multi-cast files (fixes v1.4.2 regression).
         const resolvedId = (extractor && extractor.metadataManager) ? extractor.metadataManager.resolvePaletteId(linkId) : null;
         const searchId = resolvedId || linkId;
 
-        // 3. Local Member Check (Use resolved searchId)
+        // 3. Member Search (Use resolved searchId)
         if (extractor && extractor.members) {
             const target = extractor.members.find(m => m.id === searchId);
             if (target) {
@@ -566,7 +571,13 @@ class Palette {
                     const data = target.palette?.data || target.palette || target.data;
                     const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
                     if (pal) {
-                        member.palette = { id: target.id, name: target.name, castlib: 'internal', traced: true, resolution: (resolvedId ? 'ils' : 'direct') };
+                        member.palette = {
+                            id: target.id,
+                            name: target.name,
+                            castlib: 'internal',
+                            traced: true,
+                            resolution: (resolvedId ? 'logical' : 'direct')
+                        };
                         return pal;
                     }
                 } else if (target.typeId === 1 || target.type === 'Bitmap') {
@@ -577,75 +588,37 @@ class Palette {
                     }
                 }
             }
-        }
 
-        // 4. Legacy Cast Slot Mapping (General Heuristic)
-        // If linkId is a positive integer (e.g. 8) and wasn't found as a direct Member ID,
-        // it likely refers to a Cast Slot Index (MCsL or Implicit Key Order).
-        if (linkId > 0 && extractor) {
-            let slotValue = undefined;
-
-            // Try explicit MCsL first
-            if (extractor.castOrder && extractor.castOrder[linkId] !== undefined) {
-                slotValue = extractor.castOrder[linkId];
-            }
-            // Fallback to implicit Key Table order
-            else if (extractor.metadataManager && extractor.metadataManager.castList && extractor.metadataManager.castList[linkId] !== undefined) {
-                slotValue = extractor.metadataManager.castList[linkId];
-            }
-
-            if (slotValue !== undefined) {
-                if (extractor.members) {
-                    // Try linking via Internal ID (Aliasing)
-                    let target = extractor.members.find(m => m.originalSlotId === slotValue && (m.type === 'Palette' || m.typeId === 4));
-
-                    // If not found via internal ID, try direct ID match (if slotValue is a valid Member ID)
-                    if (!target) {
-                        target = extractor.members.find(m => m.id === slotValue && (m.type === 'Palette' || m.typeId === 4));
-                    }
-
-                    if (target) {
-                        const data = target.palette?.data || target.palette || target.data;
+            // 5. Cross-Cast Reference (Project Context)
+            if (extractor && extractor.projectContext) {
+                // Priority: Explicit clutCastLib, then linkId if it looks like a cross-cast reference
+                const externalMember = await extractor.projectContext.getMember(linkId, castLibId);
+                if (externalMember) {
+                    if (externalMember.typeId === 4 || externalMember.type === 'Palette' || externalMember.format === 'pal') {
+                        const data = externalMember.palette?.data || externalMember.palette || externalMember.data;
                         const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
                         if (pal) {
-                            member.palette = { id: target.id, name: target.name, castlib: 'internal', traced: true, resolution: 'slot-lookup' };
+                            member.palette = {
+                                id: externalMember.id,
+                                name: externalMember.name,
+                                castlib: externalMember.castlibName || 'external',
+                                traced: true,
+                                resolution: 'cross-cast',
+                                castLibId: castLibId
+                            };
                             return pal;
+                        }
+                    } else if (externalMember.typeId === 1 || externalMember.type === 'Bitmap') {
+                        const borrowedPal = await this.tracePaletteChain(externalMember, extractor, platform, null, visited);
+                        if (borrowedPal) {
+                            member.palette = Object.assign({}, externalMember.palette, { traced: true, borrowedFrom: externalMember.name });
+                            return borrowedPal;
                         }
                     }
                 }
             }
+            return null;
         }
-
-        // 5. Cross-Cast Reference (Project Context)
-        if (extractor && extractor.projectContext) {
-            // Priority: Explicit clutCastLib, then linkId if it looks like a cross-cast reference
-            if (extractor.log) extractor.log('DEBUG', `[Palette] Attempting cross-cast lookup for ID ${linkId} in CastLib ${castLibId}`);
-            const externalMember = await extractor.projectContext.getMember(linkId, castLibId);
-            if (externalMember) {
-                if (externalMember.typeId === 4 || externalMember.type === 'Palette' || externalMember.format === 'pal') {
-                    const data = externalMember.palette?.data || externalMember.palette || externalMember.data;
-                    const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
-                    if (pal) {
-                        member.palette = {
-                            id: externalMember.id,
-                            name: externalMember.name,
-                            castlib: externalMember.castlibName || 'external',
-                            traced: true,
-                            resolution: 'cross-cast',
-                            castLibId: castLibId
-                        };
-                        return pal;
-                    }
-                } else if (externalMember.typeId === 1 || externalMember.type === 'Bitmap') {
-                    const borrowedPal = await this.tracePaletteChain(externalMember, extractor, platform, null, visited);
-                    if (borrowedPal) {
-                        member.palette = Object.assign({}, externalMember.palette, { traced: true, borrowedFrom: externalMember.name });
-                        return borrowedPal;
-                    }
-                }
-            }
-        }
-        return null;
     }
 
     static getSystemPaletteName(id) {

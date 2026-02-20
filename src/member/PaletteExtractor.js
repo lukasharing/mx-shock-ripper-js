@@ -1,10 +1,10 @@
-/** @version 1.4.1 */
+/** @version 1.4.2 */
 const DataStream = require('../utils/DataStream');
 const GenericExtractor = require('./GenericExtractor');
 const { Resources } = require('../Constants');
 
 /**
- * @version 1.4.1
+ * @version 1.4.2
  * PaletteExtractor - Handles parsing and formatting of Director palette (CLUT) assets.
  * 
  * See docs/doc/09_PaletteExtraction.md for technical details.

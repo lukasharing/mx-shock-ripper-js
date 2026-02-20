@@ -1,5 +1,5 @@
 /**
- * @version 1.4.1
+ * @version 1.4.2
  * CastMember.js - Metadata & geometric state for a single Cast Member
  */
 

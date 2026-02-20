@@ -1,5 +1,5 @@
 /**
- * @version 1.4.1
+ * @version 1.4.2
  * Constants.js - Centralized export hub for all technical constants
  */
 

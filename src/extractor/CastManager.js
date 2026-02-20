@@ -1,3 +1,7 @@
+/**
+ * @version 1.4.2
+ * CastManager.js - Centralized member discovery and state management
+ */
 const CastMember = require('../CastMember');
 const { MemberType, Magic, Limits, AfterburnerTags } = require('../Constants');
 const DirectorFile = require('../DirectorFile');
@@ -72,14 +76,14 @@ class CastManager {
      */
     async enrichPass1() {
         const metadata = this.extractor.metadataManager;
-        for (const member of this.members) {
+        await Promise.all(this.members.map(async (member) => {
             const map = metadata.keyTable[member.id];
             const sectionId = map ? (map[Magic.CAST] || map[Magic.CAS_STAR] || map[Magic.CArT] || map[Magic.cast_lower]) : null;
             const chunk = sectionId ? this.extractor.dirFile.getChunkById(sectionId) : null;
             if (chunk) {
                 await metadata.parseMemberMetadata(chunk, member);
             }
-        }
+        }));
     }
 
     /**
@@ -89,25 +93,24 @@ class CastManager {
         const metadata = this.extractor.metadataManager;
         const orphans = [];
 
-        for (const chunk of this.extractor.dirFile.chunks) {
+        // 1. Metadata Reconstruction & Orphan Detection
+        const contentTags = [Magic.BITD, Magic.ABMP, Magic.SND, Magic.DIB, Magic.PIXL, Magic.STXT, Magic.TXTS, Magic.CLUT, Magic.PALT_UPPER, Magic.medi, Magic.snd, Magic.ABMP, Magic.bitd_lower, Magic.text_lower, Magic.PMBA, Magic.ediM, 'SND*', Magic.manL, Magic.rcsL];
+
+        const chunks = this.extractor.dirFile.chunks;
+        await Promise.all(chunks.map(async (chunk) => {
             const rawType = DirectorFile.unprotect(chunk.type);
             const normalized = this.normalizeTag(rawType);
             const trimmed = rawType.trim();
 
-            // 1. Metadata Reconstruction
             if (normalized === Magic.CAST || normalized === Magic.CAS_STAR || normalized === 'CAS2') {
                 const member = await metadata.parseMemberMetadata(chunk);
                 if (member && !this.getMemberById(member.id)) {
                     this.members.push(member);
                 }
-            } else {
-                // 2. Orphan Content Detection
-                const contentTags = [Magic.BITD, Magic.ABMP, Magic.SND, Magic.DIB, Magic.PIXL, Magic.STXT, Magic.TXTS, Magic.CLUT, Magic.PALT_UPPER, Magic.medi, Magic.snd, Magic.ABMP, Magic.bitd_lower, Magic.text_lower, Magic.PMBA, Magic.ediM, 'SND*', Magic.manL, Magic.rcsL];
-                if (contentTags.includes(normalized) || contentTags.includes(trimmed)) {
-                    orphans.push({ chunk, tag: normalized });
-                }
+            } else if (contentTags.includes(normalized) || contentTags.includes(trimmed)) {
+                orphans.push({ chunk, tag: normalized });
             }
-        }
+        }));
 
         // Association Pass: Try to link orphans to members
         // Afterburner files often have detached content chunks (BITD/medi) that are 

@@ -1,5 +1,5 @@
 /**
- * @version 1.4.1
+ * @version 1.4.2
  * MemberSpec.js - Type-specific binary metadata parsers
  */
 
@@ -36,7 +36,7 @@ class BitmapSpec {
             clutCastLib = ds.readInt16(); // Offset 24
             clutId = ds.readInt16();      // Offset 26
 
-            // Normalize clutCastLib: -1 often means "Current Cast" (Habbo behavior)
+            // Normalize clutCastLib: -1 often means "Current Cast" (Director behavior)
             if (clutCastLib === -1) clutCastLib = 0;
 
             // Normalize built-in palette IDs (-1 offset)

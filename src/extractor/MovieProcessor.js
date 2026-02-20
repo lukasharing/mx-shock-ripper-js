@@ -9,26 +9,26 @@ class MovieProcessor {
     }
 
     async extractConfig() {
-        const configTags = [Magic.VWSC, Magic.VWCF, 'conf', 'VWky', Magic.DRCF];
-        const chunk = this.extractor.dirFile.chunks.find(c => configTags.includes(c.type));
-        if (!chunk) return;
-
         const isMovie = [Magic.MV93, Magic.MVPV].includes(this.extractor.dirFile.subtype) ||
-            this.extractor.dirFile.chunks.some(c => [Magic.VWSC, Magic.SCORE, Magic.MCsL, Magic.Lscl].includes(c.type));
+            [Magic.VWSC, Magic.SCORE, Magic.MCsL, Magic.Lscl].some(tag => this.extractor.dirFile.getChunksByType(tag).length > 0);
 
-        if (!isMovie) return;
+        if (!isMovie || !this.extractor.metadataManager.movieConfig) return;
 
-        const data = await this.extractor.dirFile.getChunkData(chunk);
+        const config = this.extractor.metadataManager.movieConfig;
+
+        // DRCF data for extra movie settings
+        const drcfChunks = [Magic.DRCF, Magic.VWCF, Magic.fgrD].flatMap(tag => this.extractor.dirFile.getChunksByType(tag));
+        const drcf = drcfChunks[0];
+        if (!drcf) return;
+
+        const data = await this.extractor.dirFile.getChunkData(drcf);
         if (!data) return;
 
         const ds = new DataStream(data, 'big');
-        const len = ds.readInt16();
+        ds.skip(2); // Skip len
         const fileVer = ds.readInt16();
         this.extractor.log('INFO', `[MovieProcessor] DRCF Version: ${fileVer}`);
         const stage = { top: ds.readInt16(), left: ds.readInt16(), bottom: ds.readInt16(), right: ds.readInt16() };
-
-        const minMember = ds.readInt16();
-        const maxMember = ds.readInt16();
 
         ds.seek(36);
         const dirVer = ds.readInt16();
@@ -76,15 +76,17 @@ class MovieProcessor {
             stageColor,
             platform,
             protection,
-            minMember,
-            maxMember
+            minMember: config.minMember,
+            maxMember: config.maxMember,
+            defaultPaletteId: config.defaultPaletteId
         };
         this.extractor.bitmapExtractor.fileVersion = fileVer;
         fs.writeFileSync(path.join(this.extractor.outputDir, 'movie.json'), JSON.stringify(this.extractor.metadata.movie, null, 2));
     }
 
     async extractTimeline() {
-        const scoreChunk = this.extractor.dirFile.chunks.find(c => c.type === Magic.VWSC || c.type === Magic.SCORE);
+        const scoreChunks = this.extractor.dirFile.getChunksByType(Magic.VWSC).concat(this.extractor.dirFile.getChunksByType(Magic.SCORE));
+        const scoreChunk = scoreChunks[0];
         if (!scoreChunk) return;
 
         const data = await this.extractor.dirFile.getChunkData(scoreChunk);
@@ -135,7 +137,8 @@ class MovieProcessor {
     }
 
     async extractCastList() {
-        const chunk = this.extractor.dirFile.chunks.find(c => c.type === Magic.MCsL || c.type === Magic.Lscl);
+        const castListChunks = this.extractor.dirFile.getChunksByType(Magic.MCsL).concat(this.extractor.dirFile.getChunksByType(Magic.Lscl));
+        const chunk = castListChunks[0];
         if (!chunk) return;
 
         const data = await this.extractor.dirFile.getChunkData(chunk);
