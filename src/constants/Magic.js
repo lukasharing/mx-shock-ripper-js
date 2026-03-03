@@ -10,6 +10,7 @@ module.exports = {
     IMAP: 'imap', // Initial Map
     MMAP: 'mmap', // Memory Map
     KEY: 'KEY*',  // Key Table
+    KEY_STAR: 'KEY*',
     CAST: 'CASt', // Cast Member Data
     LNAM: 'Lnam', // Lingo Name Table
     LSCR: 'Lscr', // Lingo Script Bytecode

@@ -84,7 +84,7 @@ class ProjectExtractor {
         await df.parse();
         await this.discoverLinkedCasts(df);
 
-        const keyChunk = df.chunks.find(c => [Magic.KEY, 'KEY ', Magic.KEYStar].includes(c.type));
+        const keyChunk = df.chunks.find(c => [Magic.KEY, Magic.KEY_SPACE, Magic.KEY_STAR].includes(c.type));
         const memberMap = {};
 
         if (keyChunk) {
@@ -120,7 +120,7 @@ class ProjectExtractor {
                 if (clutChunk) {
                     const data = await df.getChunkData(clutChunk);
                     let name = `Palette_${castID}`;
-                    const castResId = resources[Magic.CAST] || resources[Magic.CASStar];
+                    const castResId = resources[Magic.CAST] || resources[Magic.CAS_STAR];
                     if (castResId) {
                         const castChunk = df.chunks.find(c => c.id === castResId);
                         if (castChunk) {
@@ -130,7 +130,7 @@ class ProjectExtractor {
                             } catch (e) { }
                         }
                     }
-                    cluts.push({ id: castID, data: Buffer.from(data), source: path.basename(filePath), name });
+                    cluts.push({ id: castID, data: data ? Buffer.from(data) : null, source: path.basename(filePath), name });
                 }
             }
         }
@@ -186,7 +186,8 @@ class ProjectExtractor {
                     if (member.typeId === 4 && resources[Magic.CLUT]) {
                         const clutChunk = df.chunks.find(c => c.id === resources[Magic.CLUT]);
                         if (clutChunk) {
-                            member.palette = Buffer.from(await df.getChunkData(clutChunk));
+                            const paletteData = await df.getChunkData(clutChunk);
+                            member.palette = paletteData ? Buffer.from(paletteData) : null;
                         }
                     }
 
