@@ -1,5 +1,5 @@
 /**
- * @version 1.4.2
+ * @version 1.4.8
  * ProjectExtractor.js - Multi-file orchestration & Global Resource Management
  * 
  * Handles the recursive discovery of linked cast libraries (.cct/.cst) and 
@@ -34,6 +34,9 @@ class ProjectExtractor {
         this.loadedCasts = [];
         this.globalPalettes = {};
         this.memberCache = {}; // Global member lookup by [castLibPath][memberId]
+        this.castCache = {};   // Metadata cache: [path] -> { chunks, memberMap, endianness, ilsBodyOffset, ilsBody }
+        this.pendingCasts = {}; // Promise coalescing for loadCast
+        this.pendingMembers = {}; // Promise coalescing for getMember
         this.isReady = false;
     }
 
@@ -74,68 +77,98 @@ class ProjectExtractor {
      * Loads a single movie/cast and recursively follows its MCsL/Lscl linkage.
      */
     async loadCast(filePath, isEntry = false) {
-        if (!fs.existsSync(filePath)) {
-            this.log('WARN', `File not found: ${filePath}`);
-            return;
-        }
+        const absolutePath = path.resolve(filePath);
+        if (this.pendingCasts[absolutePath]) return this.pendingCasts[absolutePath];
 
-        const buffer = fs.readFileSync(filePath);
-        const df = new DirectorFile(buffer, this.log);
-        await df.parse();
-        await this.discoverLinkedCasts(df);
-
-        const keyChunk = df.chunks.find(c => [Magic.KEY, Magic.KEY_SPACE, Magic.KEY_STAR].includes(c.type));
-        const memberMap = {};
-
-        if (keyChunk) {
-            const keyData = await df.getChunkData(keyChunk);
-            if (keyData) {
-                const ds = new DataStream(keyData, df.ds.endianness);
-                let firstWord = ds.readUint16();
-                if (firstWord === KeyTableValues.EndianMismatch || firstWord > 255) {
-                    ds.endianness = ds.endianness === 'big' ? 'little' : 'big';
-                    ds.seek(0);
-                    firstWord = ds.readUint16();
-                }
-                const headerSize = firstWord === KeyTableValues.HeaderShort ? 12 : 20;
-                ds.seek(headerSize === 12 ? 8 : 16);
-                const usedCount = ds.readUint32();
-                ds.seek(headerSize);
-
-                for (let i = 0; i < usedCount; i++) {
-                    if (ds.position + 12 > keyData.length) break;
-                    const sectionID = ds.readInt32();
-                    const castID = ds.readInt32();
-                    const tag = ds.readFourCC();
-                    if (!memberMap[castID]) memberMap[castID] = {};
-                    memberMap[castID][tag] = sectionID;
-                }
+        this.pendingCasts[absolutePath] = (async () => {
+            if (!fs.existsSync(absolutePath)) {
+                this.log('WARN', `File not found: ${absolutePath}`);
+                return;
             }
-        }
 
-        const cluts = [];
-        for (const [castID, resources] of Object.entries(memberMap)) {
-            if (resources[Magic.CLUT]) {
-                const clutChunk = df.chunks.find(c => c.id === resources[Magic.CLUT]);
-                if (clutChunk) {
-                    const data = await df.getChunkData(clutChunk);
-                    let name = `Palette_${castID}`;
-                    const castResId = resources[Magic.CAST] || resources[Magic.CAS_STAR];
-                    if (castResId) {
-                        const castChunk = df.chunks.find(c => c.id === castResId);
-                        if (castChunk) {
-                            try {
-                                const m = CastMember.fromChunk(castID, await df.getChunkData(castChunk), df.ds.endianness);
-                                if (m.name) name = m.name;
-                            } catch (e) { }
+            // check cache first
+            if (this.castCache[absolutePath]) {
+                const cached = this.castCache[absolutePath];
+                this.loadedCasts.push({ path: absolutePath, cluts: cached.cluts, memberMap: cached.memberMap });
+                return;
+            }
+
+            this.log('INFO', `Loading cast metadata: ${path.basename(absolutePath)}`);
+            const fd = fs.openSync(absolutePath, 'r');
+            try {
+                const stats = fs.fstatSync(fd);
+                const df = new DirectorFile(fd, this.log, stats.size);
+                await df.parse();
+                await this.discoverLinkedCasts(df);
+
+                const keyChunk = df.chunks.find(c => [Magic.KEY, Magic.KEY_SPACE, Magic.KEY_STAR].includes(c.type));
+                const memberMap = {};
+
+                if (keyChunk) {
+                    const keyData = await df.getChunkData(keyChunk);
+                    if (keyData) {
+                        const ds = new DataStream(keyData, df.ds.endianness);
+                        let firstWord = ds.readUint16();
+                        if (firstWord === KeyTableValues.EndianMismatch || firstWord > 255) {
+                            ds.endianness = ds.endianness === 'big' ? 'little' : 'big';
+                            ds.seek(0);
+                            firstWord = ds.readUint16();
+                        }
+                        const headerSize = firstWord === KeyTableValues.HeaderShort ? 12 : 20;
+                        ds.seek(headerSize === 12 ? 8 : 16);
+                        const usedCount = ds.readUint32();
+                        ds.seek(headerSize);
+
+                        for (let i = 0; i < usedCount; i++) {
+                            if (ds.position + 12 > keyData.length) break;
+                            const sectionID = ds.readInt32();
+                            const castID = ds.readInt32();
+                            const tag = ds.readFourCC();
+                            if (!memberMap[castID]) memberMap[castID] = {};
+                            memberMap[castID][tag] = sectionID;
                         }
                     }
-                    cluts.push({ id: castID, data: data ? Buffer.from(data) : null, source: path.basename(filePath), name });
                 }
-            }
-        }
 
-        this.loadedCasts.push({ path: filePath, cluts, memberMap });
+                const cluts = [];
+                for (const [castID, resources] of Object.entries(memberMap)) {
+                    if (resources[Magic.CLUT]) {
+                        const clutChunk = df.chunks.find(c => c.id === resources[Magic.CLUT]);
+                        if (clutChunk) {
+                            const data = await df.getChunkData(clutChunk);
+                            let name = `Palette_${castID}`;
+                            const castResId = resources[Magic.CAST] || resources[Magic.CAS_STAR];
+                            if (castResId) {
+                                const castChunk = df.chunks.find(c => c.id === castResId);
+                                if (castChunk) {
+                                    try {
+                                        const m = CastMember.fromChunk(castID, await df.getChunkData(castChunk), df.ds.endianness);
+                                        if (m.name) name = m.name;
+                                    } catch (e) { }
+                                }
+                            }
+                            cluts.push({ id: castID, data: data ? Buffer.from(data) : null, source: path.basename(absolutePath), name });
+                        }
+                    }
+                }
+
+                this.castCache[absolutePath] = {
+                    chunks: df.chunks,
+                    memberMap,
+                    cluts,
+                    endianness: df.ds.endianness,
+                    ilsBodyOffset: df.ilsBodyOffset,
+                    ilsBody: df._ilsBody,
+                    isAfterburned: df.isAfterburned
+                };
+
+                this.loadedCasts.push({ path: absolutePath, cluts, memberMap });
+            } finally {
+                fs.closeSync(fd);
+            }
+        })();
+
+        return this.pendingCasts[absolutePath];
     }
 
     /**
@@ -166,40 +199,58 @@ class ProjectExtractor {
 
         const cacheKey = `${cast.path}_${memberId}`;
         if (this.memberCache[cacheKey]) return this.memberCache[cacheKey];
+        if (this.pendingMembers[cacheKey]) return this.pendingMembers[cacheKey];
 
-        // We need to re-open/parse to get the chunk data if not already cached
-        // (Optimized: we only extract the CAST chunk to get metadata)
-        try {
-            const buffer = fs.readFileSync(cast.path);
-            const df = new DirectorFile(buffer, this.log);
-            await df.parse();
+        this.pendingMembers[cacheKey] = (async () => {
+            const cachedMetadata = this.castCache[cast.path];
+            if (!cachedMetadata) return null;
 
-            const resources = cast.memberMap[memberId];
-            const castResId = resources[Magic.CAST] || resources[Magic.CAS_STAR] || resources[Magic.CArT] || resources[Magic.cast_lower];
+            const fd = fs.openSync(cast.path, 'r');
+            try {
+                const stats = fs.fstatSync(fd);
+                const df = new DirectorFile(fd, this.log, stats.size);
 
-            if (castResId) {
-                const chunk = df.chunks.find(c => c.id === castResId);
-                if (chunk) {
-                    const member = CastMember.fromChunk(memberId, await df.getChunkData(chunk), df.ds.endianness);
+                // Fast-track: Restore parsed structure from metadata cache
+                df.chunks = cachedMetadata.chunks;
+                df.ds.endianness = cachedMetadata.endianness;
+                df.ilsBodyOffset = cachedMetadata.ilsBodyOffset;
+                df._ilsBody = cachedMetadata.ilsBody;
+                df.isAfterburned = cachedMetadata.isAfterburned;
+                df._reindexChunks();
 
-                    // If it's a palette, attach the data
-                    if (member.typeId === 4 && resources[Magic.CLUT]) {
-                        const clutChunk = df.chunks.find(c => c.id === resources[Magic.CLUT]);
-                        if (clutChunk) {
-                            const paletteData = await df.getChunkData(clutChunk);
-                            member.palette = paletteData ? Buffer.from(paletteData) : null;
+                const resources = cast.memberMap[memberId];
+                const castResId = resources[Magic.CAST] || resources[Magic.CAS_STAR] || resources[Magic.CArT] || resources[Magic.cast_lower];
+
+                if (castResId) {
+                    const chunk = df.chunks.find(c => c.id === castResId);
+                    if (chunk) {
+                        const castData = await df.getChunkData(chunk);
+                        if (!castData) return null;
+
+                        const member = CastMember.fromChunk(memberId, castData, df.ds.endianness);
+
+                        // If it's a palette, attach the data
+                        if (member.typeId === 4 && resources[Magic.CLUT]) {
+                            const clutChunk = df.chunks.find(c => c.id === resources[Magic.CLUT]);
+                            if (clutChunk) {
+                                const paletteData = await df.getChunkData(clutChunk);
+                                member.palette = paletteData ? Buffer.from(paletteData) : null;
+                            }
                         }
+
+                        this.memberCache[cacheKey] = member;
+                        return member;
                     }
-
-                    this.memberCache[cacheKey] = member;
-                    return member;
                 }
+            } catch (e) {
+                this.log('ERROR', `Failed to resolve cross-cast member ${memberId} in ${path.basename(cast.path)}: ${e.message}`);
+            } finally {
+                fs.closeSync(fd);
             }
-        } catch (e) {
-            this.log('ERROR', `Failed to resolve cross-cast member ${memberId} in ${path.basename(cast.path)}: ${e.message}`);
-        }
+            return null;
+        })();
 
-        return null;
+        return this.pendingMembers[cacheKey];
     }
 
     /**
