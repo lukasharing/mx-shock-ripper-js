@@ -33,6 +33,7 @@ class ProjectExtractor {
         });
         this.loadedCasts = [];
         this.globalPalettes = {};
+        this.memberCache = {}; // Global member lookup by [castLibPath][memberId]
         this.isReady = false;
     }
 
@@ -134,7 +135,70 @@ class ProjectExtractor {
             }
         }
 
-        this.loadedCasts.push({ path: filePath, cluts });
+        this.loadedCasts.push({ path: filePath, cluts, memberMap });
+    }
+
+    /**
+     * Resolves a member across any loaded cast library.
+     * @param {number} memberId - The target member ID
+     * @param {number} castLibId - Optional cast library index (1-based)
+     */
+    async getMember(memberId, castLibId = 0) {
+        // If castLibId is provided, look in that specific cast
+        if (castLibId > 0 && this.loadedCasts[castLibId - 1]) {
+            return await this.getMemberFromCast(this.loadedCasts[castLibId - 1], memberId);
+        }
+
+        // Otherwise, search all loaded casts (prioritize the first one/entry movie)
+        for (const cast of this.loadedCasts) {
+            const member = await this.getMemberFromCast(cast, memberId);
+            if (member) return member;
+        }
+
+        return null;
+    }
+
+    /**
+     * Internal helper to extract and cache a member from a loaded cast.
+     */
+    async getMemberFromCast(cast, memberId) {
+        if (!cast || !cast.memberMap[memberId]) return null;
+
+        const cacheKey = `${cast.path}_${memberId}`;
+        if (this.memberCache[cacheKey]) return this.memberCache[cacheKey];
+
+        // We need to re-open/parse to get the chunk data if not already cached
+        // (Optimized: we only extract the CAST chunk to get metadata)
+        try {
+            const buffer = fs.readFileSync(cast.path);
+            const df = new DirectorFile(buffer, this.log);
+            await df.parse();
+
+            const resources = cast.memberMap[memberId];
+            const castResId = resources[Magic.CAST] || resources[Magic.CAS_STAR] || resources[Magic.CArT] || resources[Magic.cast_lower];
+
+            if (castResId) {
+                const chunk = df.chunks.find(c => c.id === castResId);
+                if (chunk) {
+                    const member = CastMember.fromChunk(memberId, await df.getChunkData(chunk), df.ds.endianness);
+
+                    // If it's a palette, attach the data
+                    if (member.typeId === 4 && resources[Magic.CLUT]) {
+                        const clutChunk = df.chunks.find(c => c.id === resources[Magic.CLUT]);
+                        if (clutChunk) {
+                            member.palette = await df.getChunkData(clutChunk);
+                        }
+                    }
+
+                    this.memberCache[cacheKey] = member;
+                    return member;
+                }
+            }
+        } catch (e) {
+            this.log('ERROR', `Failed to resolve cross-cast member ${memberId} in ${path.basename(cast.path)}: ${e.message}`);
+        }
+
+        return null;
     }
 
     /**

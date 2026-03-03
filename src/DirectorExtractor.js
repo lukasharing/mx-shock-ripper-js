@@ -63,6 +63,7 @@ class DirectorExtractor extends BaseExtractor {
         this.movieProcessor = new MovieProcessor(this);
         this.memberProcessor = new MemberProcessor(this);
         this.scriptHandler = new ScriptHandler(this);
+        this.projectContext = options.projectContext || null;
 
         this.dirFile = null;
         this.castLibs = [];
