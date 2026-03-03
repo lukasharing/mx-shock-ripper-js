@@ -130,7 +130,7 @@ class ProjectExtractor {
                             } catch (e) { }
                         }
                     }
-                    cluts.push({ id: castID, data, source: path.basename(filePath), name });
+                    cluts.push({ id: castID, data: Buffer.from(data), source: path.basename(filePath), name });
                 }
             }
         }
@@ -186,7 +186,7 @@ class ProjectExtractor {
                     if (member.typeId === 4 && resources[Magic.CLUT]) {
                         const clutChunk = df.chunks.find(c => c.id === resources[Magic.CLUT]);
                         if (clutChunk) {
-                            member.palette = await df.getChunkData(clutChunk);
+                            member.palette = Buffer.from(await df.getChunkData(clutChunk));
                         }
                     }
 

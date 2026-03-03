@@ -283,6 +283,7 @@ class DirectorExtractor extends BaseExtractor {
                     } else if (remaining === 0) {
                         resolve();
                     }
+                    this.log('INFO', `[${remaining} members left] Progress: ${((this.stats.processed / processQueue.length) * 100).toFixed(1)}%`);
                 } else if (msg.type === 'SKIP') {
                     this.log('INFO', `Skipping member ${msg.id} (unchanged)`);
                     this.stats.skipped++;
@@ -292,6 +293,7 @@ class DirectorExtractor extends BaseExtractor {
                     } else if (remaining === 0) {
                         resolve();
                     }
+                    this.log('INFO', `[${remaining} members left] Progress: ${((this.stats.processed / processQueue.length) * 100).toFixed(1)}%`);
                 } else if (msg.type === 'ERROR') {
                     this.log('ERROR', `Worker error for member ${msg.id}: ${msg.message}`);
                     remaining--;
@@ -300,6 +302,7 @@ class DirectorExtractor extends BaseExtractor {
                     } else if (remaining === 0) {
                         resolve();
                     }
+                    this.log('INFO', `[${remaining} members left] Progress: ${((this.stats.processed / processQueue.length) * 100).toFixed(1)}%`);
                 }
             };
 
@@ -336,6 +339,13 @@ class DirectorExtractor extends BaseExtractor {
                 worker.on('error', (err) => {
                     this.log('ERROR', `Worker thread error: ${err.message}`);
                     reject(err);
+                });
+                worker.on('exit', (code) => {
+                    if (code !== 0 && !this._isStopping) {
+                        const err = new Error(`Worker stopped with exit code ${code}`);
+                        this.log('ERROR', err.message);
+                        reject(err);
+                    }
                 });
 
                 if (taskQueue.length > 0) {
