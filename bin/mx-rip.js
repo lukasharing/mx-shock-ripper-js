@@ -86,6 +86,7 @@ async function main() {
         process.stdout.write(`[INFO] Initializing: ${path.basename(inputPath)} -> ${outputDir}\n`);
         await extractor.extract();
         process.stdout.write(`[SUCCESS] Assets extracted successfully.\n`);
+        process.exit(0);
     } catch (e) {
         process.stderr.write(`[FATAL] ${e.message}\n`);
         process.exit(1);

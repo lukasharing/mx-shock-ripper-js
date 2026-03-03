@@ -348,7 +348,7 @@ class DirectorExtractor extends BaseExtractor {
 
         // Terminate persistent workers
         this._isStopping = true;
-        for (const w of workers) w.terminate();
+        await Promise.all(workers.map(w => w.terminate()));
 
         this.log('SUCCESS', `Processed ${this.stats.processed} members.`);
 
