@@ -54,6 +54,8 @@ class ASTWrapper {
         this.blockStack.pop();
         if (this.blockStack.length > 0) {
             this.currentBlock = this.blockStack[this.blockStack.length - 1];
+        } else {
+            this.currentBlock = null;
         }
     }
 

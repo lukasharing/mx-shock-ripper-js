@@ -133,8 +133,10 @@ class LingoDecompiler {
                     context.index = i;
 
                     // Close control flow blocks if jump target reached
-                    while (ast.currentBlock.endPos > 0 && bc.pos >= ast.currentBlock.endPos) {
+                    let safetyShift = 0;
+                    while (ast.currentBlock && ast.currentBlock.endPos > 0 && bc.pos >= ast.currentBlock.endPos && safetyShift < 100) {
                         ast.exitBlock();
+                        safetyShift++;
                     }
 
                     // Detection for 'otherwise' branch

@@ -149,8 +149,6 @@ class DirectorExtractor extends BaseExtractor {
         }
 
         // Phase 4: Member Content Processing (Persistent Worker Pool)
-        this.log('INFO', `Processing ${this.members.length} members with persistent Worker Pool (Threads: ${this.concurrency})`);
-
         const contentTags = [
             Magic.CAST, Magic.CAS_STAR, Magic.CArT, Magic.cast_lower,
             Magic.BITD, Magic.DIB, Magic.dib_star, Magic.bitd_lower,
@@ -251,7 +249,6 @@ class DirectorExtractor extends BaseExtractor {
         }
 
         // Phase 4.1: Parallel Palette Resolution
-        this.log('INFO', `Resolving palettes for ${processQueue.length} members in parallel...`);
         await Promise.all(processQueue.map(async (member) => {
             if (member.typeId === MemberType.Bitmap || member.typeId === MemberType.Shape) {
                 member._resolvedPalette = await Palette.resolveMemberPalette(member, this) || null;
