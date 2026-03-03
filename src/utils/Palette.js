@@ -689,7 +689,7 @@ class Palette {
             logicalPaletteId = member.secondaryPaletteId;
         }
 
-        // Canonical Movie Default Resolution (ScummVM-style)
+        // Canonical Movie Default Resolution (Standardized)
         // If ID is 0/-1, we check if a movie-wide default is set in the DRCF.
         if ((logicalPaletteId === 0 || logicalPaletteId === -1) && extractor?.metadataManager?.movieConfig?.defaultPaletteId) {
             const defId = extractor.metadataManager.movieConfig.defaultPaletteId;

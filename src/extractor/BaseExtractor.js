@@ -20,7 +20,7 @@ class BaseExtractor {
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
             }
-            this.log('DEBUG', `[BaseExtractor] Writing ${buffer.length} bytes to ${outputPath} (Type: ${type})`);
+
             fs.writeFileSync(outputPath, buffer);
             const checksum = crypto.createHash('sha256').update(buffer).digest('hex');
             return { success: true, file: path.basename(outputPath), path: outputPath, format: type, checksum };

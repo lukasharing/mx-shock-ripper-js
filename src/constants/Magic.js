@@ -75,14 +75,22 @@ module.exports = {
     manL: 'manL',
     XTCL: 'XTCL',
     LCTX_UPPER: 'LCTX',
+    Lctx: 'Lctx',
+    lctx_lower: 'lctx',
     PIXL: 'PIXL',
     rcsL: 'rcsL',
     ILS: 'ILS ',
     ILS_REV: ' ,i',
+    // Legacy Media Types
+    MooV: 'MooV',
+    VdM: 'VdM ',
+    Flas: 'Flas',
+    MCrs: 'MCrs',
+    PICT: 'PICT',
+    FX_STAR: 'Fx*',
+
     // Afterburner Inline
     IEGF: 'IEGF',
-    fgrD: 'fgrD',
-    // Junk/Free
     junk: 'junk',
     free: 'free'
 };

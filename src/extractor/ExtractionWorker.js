@@ -22,7 +22,7 @@ const { MemberType, Magic, Resources } = require('../Constants');
  * Uses shared FD and metadata to perform autonomous Disk I/O.
  */
 
-const { fd, keyTable, nameTable, chunks, fmap, lctxMap, options: workerOptions, isAfterburned, ilsBodyOffset } = workerData;
+const { fd, keyTable, nameTable, chunks, fmap, lctxMap, options: workerOptions, isAfterburned, ilsBodyOffset, ilsBody } = workerData;
 
 
 const logProxy = (lvl, msg, memberId) => {
@@ -47,41 +47,49 @@ const getChunkById = (id) => {
 const getChunkData = async (chunk) => {
     if (!chunk) return null;
     try {
-        // Use pre-calculated physicalOffset from DirectorExtractor
         const physicalOffset = chunk.physicalOffset;
-        if (!physicalOffset) return null;
+        let buf;
 
-        const buf = Buffer.allocUnsafe(chunk.len);
-        const bytesRead = fs.readSync(fd, buf, 0, chunk.len, physicalOffset);
-        if (bytesRead < chunk.len) {
-            logProxy('WARN', `Truncated read for chunk ${chunk.id}: expected ${chunk.len}, got ${bytesRead}`);
-            // Safety zero-fill remainder if truncated
-            buf.fill(0, bytesRead);
+        if (isAfterburned && chunk.isIlsResident && ilsBody) {
+            const start = chunk.off;
+            const end = start + chunk.len;
+            if (start < 0 || end > ilsBody.length) {
+                logProxy('ERROR', `Chunk ${chunk.id} ILS range [${start},${end}) out of bounds (ilsBody=${ilsBody.length})`);
+                return null;
+            }
+            buf = ilsBody.slice(start, end);
+        } else {
+            buf = Buffer.allocUnsafe(chunk.len);
+            const bytesRead = fs.readSync(fd, buf, 0, chunk.len, physicalOffset);
+            if (bytesRead < chunk.len) {
+                logProxy('WARN', `Truncated read for chunk ${chunk.id}: expected ${chunk.len}, got ${bytesRead}`);
+                buf.fill(0, bytesRead);
+            }
         }
 
-        let data = buf;
-        // Robust decompression trail: zlib -> raw -> raw+offset
+        // Decompression: try standard inflate -> raw inflate -> scan for 0x78 (prefix-friendly)
         if (chunk.compType === 1 || (chunk.uncompLen > 0 && chunk.uncompLen !== chunk.len)) {
             try {
-                data = zlib.inflateSync(buf);
+                buf = zlib.inflateSync(buf);
             } catch (e) {
                 try {
-                    data = zlib.inflateRawSync(buf);
+                    buf = zlib.inflateRawSync(buf);
                 } catch (e2) {
-                    // Fallback: If both fail, try scanning for Zlib header (0x78)
-                    for (let i = 0; i < Math.min(buf.length, 128); i++) {
-                        if (buf[i] === 0x78 && (buf[i + 1] === 0x01 || buf[i + 1] === 0x9C || buf[i + 1] === 0xDA)) {
+                    // Fallback: Scan for Zlib header (0x78) with small prefix (Afterburner quirk)
+                    let inflated = false;
+                    for (let i = 1; i < Math.min(buf.length, 8); i++) {
+                        if (buf[i] === 0x78 && (buf[i + 1] === 0x01 || buf[i + 1] === 0x9c || buf[i + 1] === 0xda)) {
                             try {
-                                data = zlib.inflateSync(buf.slice(i));
+                                buf = zlib.inflateSync(buf.slice(i));
+                                inflated = true;
                                 break;
                             } catch (inner) { }
                         }
                     }
-                    if (!data) data = buf;
                 }
             }
         }
-        return data;
+        return buf;
     } catch (e) {
         logProxy('ERROR', `Failed to read/decompress chunk ${chunk.id}: ${e.message}`);
         return null;
@@ -154,9 +162,7 @@ const movieExtractor = new MovieExtractor(logProxy);
 const genericExtractor = new GenericExtractor(logProxy);
 const lingoDecompiler = new LingoDecompiler(logProxy, mockExtractor);
 
-if (chunks && chunks.length > 0) {
-    logProxy('DEBUG', `[Worker] Chunk count: ${chunks.length}, ID range: ${chunks[0].id} to ${chunks[chunks.length - 1].id}`);
-}
+
 
 parentPort.on('message', async (task) => {
     const { member, outPathPrefix, palette, knownChecksum } = task;
@@ -166,7 +172,6 @@ parentPort.on('message', async (task) => {
         const map = keyTable[memberId];
         const isScript = member.typeId === MemberType.Script;
         if (!map && !isScript) {
-            logProxy('DEBUG', `Skipping phantom member ${memberId} (no keyTable entry)`);
             parentPort.postMessage({ type: 'DONE', id: memberId, checksum: null });
             return;
         }
@@ -177,25 +182,34 @@ parentPort.on('message', async (task) => {
         let data = null;
         if (sectionId > 0) {
             const chunk = getChunkById(sectionId);
-            if (!chunk) throw new Error(`Missing chunk ${sectionId} for member ${memberId}`);
+            if (!chunk) {
+                logProxy('WARNING', `Skipping member ${memberId}: Physical chunk ${sectionId} is missing (likely an external linked asset)`);
+                parentPort.postMessage({ type: 'SKIP', id: memberId });
+                return;
+            }
             data = await getChunkData(chunk);
-            if (!data) throw new Error(`Failed to read chunk data for ${memberId}`);
+            if (!data) {
+                logProxy('WARNING', `Skipping member ${memberId}: Failed to read chunk data`);
+                parentPort.postMessage({ type: 'SKIP', id: memberId });
+                return;
+            }
         }
 
         // [Incremental] Fast Content Hashing
         let contentHash = '';
-        if (data && !workerOptions.skipChecksum) {
-            const hash = crypto.createHash('sha256');
-            hash.update(data);
-            contentHash = hash.digest('hex');
+        if (data) {
+            if (!Buffer.isBuffer(data)) data = Buffer.from(data);
+            if (!workerOptions.skipChecksum) {
+                const hash = crypto.createHash('sha256');
+                hash.update(data);
+                contentHash = hash.digest('hex');
+            }
         }
 
         if (knownChecksum) {
-            logProxy('DEBUG', `[Worker] Member ${memberId} checksum check: content=${contentHash.substring(0, 8)}, known=${knownChecksum.substring(0, 8)}`);
         }
 
         if (knownChecksum && contentHash === knownChecksum && !workerOptions.force) {
-            logProxy('DEBUG', `[Worker] SKIP signal for ${memberId}`);
             parentPort.postMessage({ type: 'SKIP', id: memberId });
             return;
         }
@@ -233,7 +247,6 @@ parentPort.on('message', async (task) => {
                 lscrId = lctxMap[memberId];
             }
 
-            logProxy('DEBUG', `[Worker] Script resolution for ${member.name} (id:${memberId}, scriptId:${member.scriptId}) -> lscrId:${lscrId}, sectionId:${sectionId}`);
 
             let scriptData = data;
             if (lscrId && lscrId !== sectionId) {
@@ -243,14 +256,55 @@ parentPort.on('message', async (task) => {
                 }
             }
 
+            if (scriptData) scriptData = Buffer.from(scriptData);
+
+
             const decompiled = lingoDecompiler.decompile(scriptData, nameTable, member.scriptType || 0, memberId, workerOptions);
             const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
-            if (source) {
-                const outPath = outPathPrefix + Resources.FileExtensions.Script;
+            if (source !== null && source !== undefined) {
+                let finalName = member.name || `member_${memberId}`;
+                let wasRenamed = false;
+
+
+                if (/^member_\d+$/.test(finalName)) {
+                    // 1. Try deterministic naming from LSCR header (factoryId) at offset 46
+                    if (scriptData && scriptData.length >= 48) {
+                        scriptData = Buffer.from(scriptData); // Ensure Buffer (ilsBody.slice may return Uint8Array)
+                        const hLen = scriptData.readUInt16BE(16);
+                        if (hLen >= 92) {
+                            const factoryId = scriptData.readInt16BE(48);
+                            if (factoryId >= 0 && nameTable[factoryId]) {
+                                finalName = nameTable[factoryId];
+                                wasRenamed = true;
+                            }
+                        }
+                    }
+
+                    // 2. Heuristic sniffing fallback (sniffing class variables)
+                    // We give priority to class names found in source if they exist
+                    const match = String(source).match(/["']([a-zA-Z0-9_.-]+\.class)["']/i);
+                    if (match && match[1]) {
+                        finalName = match[1];
+                        wasRenamed = true;
+                        logProxy('INFO', `Heuristic algorithm renamed anonymous ${member.name} -> ${finalName}`);
+                    } else if (wasRenamed) {
+                        logProxy('INFO', `Deterministic metadata renamed anonymous ${member.name} -> ${finalName}`);
+                    }
+                }
+
+                const safeName = finalName.replace(/[/\\?%*:|"<>]/g, '_');
+                const outDir = require('path').dirname(outPathPrefix);
+                const outPath = require('path').join(outDir, `${safeName}.ls`);
+
                 fs.writeFileSync(outPath, source);
-                if (workerOptions.lasm && decompiled.lasm) fs.writeFileSync(outPathPrefix + ".lasm", decompiled.lasm);
+
+                if (workerOptions.lasm && typeof decompiled === 'object' && decompiled.lasm) {
+                    const lasmPath = require('path').join(outDir, `${safeName}.lasm`);
+                    fs.writeFileSync(lasmPath, decompiled.lasm);
+                }
+
                 const checksum = crypto.createHash('sha256').update(source).digest('hex');
-                result = { format: Resources.Formats.LS, file: outPath, checksum };
+                result = { format: Resources.Formats.LS, file: outPath, checksum, renamed: wasRenamed ? finalName : undefined };
             }
         } else if (typeId === MemberType.FilmLoop) {
             result = await movieExtractor.save(data, outPathPrefix + Resources.FileExtensions.JSON, member);
@@ -264,11 +318,12 @@ parentPort.on('message', async (task) => {
         parentPort.postMessage({
             type: 'DONE',
             id: memberId,
-            checksum: contentHash, // Use the calculated hash
+            checksum: result?.checksum || contentHash, // Use script checksum if available
             format: result?.format,
             scriptFile: result?.file || result?.path,
             width: result?.width,
-            height: result?.height
+            height: result?.height,
+            renamed: result?.renamed
         });
     } catch (e) {
         logProxy('ERROR', `Error for ${memberId}: ${e.message}`);

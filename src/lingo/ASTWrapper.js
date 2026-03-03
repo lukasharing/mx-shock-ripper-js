@@ -14,7 +14,8 @@
  *    `endPos` of the top-most block on the stack, that block is "exited" 
  *    (popped), returning the insertion point to the parent block.
  * 
- * Based on ProjectorRaysJS.
+ * Facilitates the tree-building phase of the decompiler by 
+ * tracking the "Active Block" during the sequential processing of bytecode.
  */
 
 const AST = require('./LingoAST');
@@ -57,10 +58,12 @@ class ASTWrapper {
     }
 
     /**
-     * Serializes the entire AST tree back to Lingo source code.
+     * Serializes the entire AST tree back to Lingo source code using a string builder.
      */
     toString() {
-        return this.root.toString();
+        const arr = [];
+        this.root.buildString(arr, "");
+        return arr.join("");
     }
 }
 

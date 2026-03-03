@@ -81,14 +81,14 @@ class ScriptHandler {
         let lscrId = 0;
         let source = null;
 
-        this.extractor.log('DEBUG', `Resolving Lscr for ${member.name} (id:${member.id}, scriptId:${member.scriptId})`);
+
         if (member.scriptId > 0 && this.extractor.metadataManager.lctxMap[member.scriptId]) {
             lscrId = this.extractor.metadataManager.lctxMap[member.scriptId];
-            this.extractor.log('DEBUG', `Resolved ${member.name} -> Lscr ${lscrId} via LctxMap[scriptId: ${member.scriptId}]`);
+
             source = 'Lscr (LctX)';
         } else if (member.id > 0 && this.extractor.metadataManager.lctxMap[member.id]) {
             lscrId = this.extractor.metadataManager.lctxMap[member.id];
-            this.extractor.log('DEBUG', `Resolved ${member.name} -> Lscr ${lscrId} via LctxMap[id: ${member.id}] (Fallback)`);
+
             source = 'Lscr (LctX)';
         }
 
@@ -97,17 +97,11 @@ class ScriptHandler {
                 if (!key) continue;
                 lscrId = key[Magic.LSCR] || key[AfterburnerTags.rcsL] || key['Lscr'] || key['rcsL'];
                 if (lscrId) {
-                    this.extractor.log('DEBUG', `Resolved ${member.name} -> Lscr ${lscrId} via KeyTable`);
+
                     source = 'Lscr (KeyTable)';
                     break;
                 }
             }
-        }
-
-        if (!lscrId && member.scriptChunkId) {
-            lscrId = member.scriptChunkId;
-            this.extractor.log('DEBUG', `Resolved ${member.name} -> Lscr ${lscrId} via Heuristic (scriptChunkId)`);
-            source = 'Lscr (Heuristic)';
         }
 
         return { lscrId, source };

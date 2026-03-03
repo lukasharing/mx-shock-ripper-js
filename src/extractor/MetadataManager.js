@@ -101,7 +101,7 @@ class MetadataManager {
                 tag = ds.readFourCC();
             } else if (entrySize === Offsets.KeyEntryShort) {
                 sectionID = ds.readInt32();
-                tag = ds.readFourCC();
+                tag = DirectorFile.unprotect(ds.readFourCC());
                 castID = i + 1; // Implied index
             } else {
                 ds.skip(entrySize);
@@ -117,7 +117,10 @@ class MetadataManager {
             this.castList[i + 1] = castID;
         }
 
-        const lctxChunks = this.extractor.dirFile.getChunksByType(Magic.LCTX_UPPER).concat(this.extractor.dirFile.getChunksByType(Magic.XTCL));
+        const lctxChunks = this.extractor.dirFile.getChunksByType(Magic.LCTX_UPPER)
+            .concat(this.extractor.dirFile.getChunksByType(Magic.Lctx))
+            .concat(this.extractor.dirFile.getChunksByType(Magic.lctx_lower))
+            .concat(this.extractor.dirFile.getChunksByType(Magic.XTCL));
         for (const chunk of lctxChunks) {
             const data = await this.extractor.dirFile.getChunkData(chunk);
             if (!data) {
@@ -133,33 +136,42 @@ class MetadataManager {
                 const ds = new DataStream(data, this.extractor.dirFile.ds.endianness);
                 ds.skip(8);
                 let entryCount = ds.readUint32();
+                ds.readUint32(); // unknown 1
+                let entriesOffset = ds.readUint16();
+                let entrySize = ds.readUint16();
 
                 // Auto-calibrate LCTX endianness
-                if (entryCount > 0xFFFF) {
+                // Endianness calibration fails if entryCount === 0 unless we check geometry offsets
+                if (entryCount > 0xFFFF || entriesOffset > data.length || entrySize > 1024) {
                     ds.endianness = ds.endianness === 'big' ? 'little' : 'big';
                     ds.seek(8);
                     entryCount = ds.readUint32();
+                    ds.readUint32();
+                    entriesOffset = ds.readUint16();
+                    entrySize = ds.readUint16();
                 }
-
-                ds.readUint32();
-                const entriesOffset = ds.readUint16();
 
                 if (entriesOffset < data.length) {
                     ds.seek(entriesOffset);
                     for (let i = 1; i <= entryCount; i++) {
-                        if (ds.position + 12 > data.length) break;
-                        ds.readInt32();
+                        const entryStart = ds.position;
+                        if (entryStart + entrySize > data.length) break;
+
+                        ds.readInt32(); // unknown/flags
                         const sectionId = ds.readInt32();
-                        ds.readUint16();
-                        ds.readUint16();
+
+                        // Advance to next entry based on actual size, rather than sequential fixed reads
+                        ds.seek(entryStart + entrySize);
 
                         if (sectionId > -1) {
-                            this.extractor.log('DEBUG', `LCTX Entry ${i} -> Section ${sectionId}`);
+
                             this.lctxMap[i] = sectionId;
                         }
                     }
+
                 }
             } catch (e) {
+
                 this.extractor.log('ERROR', `Failed to parse LCTX chunk ${chunk.id}: ${e.message}`);
             }
         }
@@ -306,8 +318,18 @@ class MetadataManager {
         const data = await this.extractor.dirFile.getChunkData(chunk);
         if (!data) return null;
 
-        const memberIdFromRes = this.resToMember[chunk.id] || chunk.id;
+        if (!this.invFmap && this.extractor.dirFile.fmap) {
+            this.invFmap = {};
+            for (const [logical, physical] of Object.entries(this.extractor.dirFile.fmap)) {
+                this.invFmap[physical] = parseInt(logical, 10);
+            }
+        }
+        const logicalId = (this.invFmap && this.invFmap[chunk.id] !== undefined) ? this.invFmap[chunk.id] : chunk.id;
+        const memberIdFromRes = this.resToMember[logicalId] || logicalId;
+
         const member = CastMember.fromChunk(memberIdFromRes, data, this.extractor.dirFile.ds.endianness);
+
+
 
         // Attempt to capture legacy internal ID (Slot ID) from CASt header
         if (data.length >= Offsets.Cast.HeaderSize + 4) {
@@ -318,15 +340,11 @@ class MetadataManager {
 
         // Resolve Descriptive Name from LNAM Pool
         // Hierarchy:
-        // 1. Explicit nameIdx from CASt chunk (preferred for modern Director)
+        // 1. (Removed, was incorrect LNAM mapping)
+
         // 2. Slot Index mapping (Director 4+ legacy fallback)
         // 3. Resource ID table lookup
-        if (this.nameTable && this.nameTable.length > 0) {
-            // Priority 1: Explicit nameIdx from CASt chunk (preferred for modern Director)
-            if (member.nameIdx !== undefined && member.nameIdx > 0 && this.nameTable[member.nameIdx - 1]) {
-                member.name = this.nameTable[member.nameIdx - 1];
-            }
-        }
+
 
         // Final Default: Generic member_ID
         if (!member.name) member.name = `member_${memberIdFromRes}`;
@@ -371,16 +389,38 @@ class MetadataManager {
             const ds = new DataStream(data, 'big');
             const len = ds.readInt16();
 
-            // Offset 12 (int16): minMember - The base logical ID for the first member.
-            // Offset 14 (int16): maxMember - The highest logical ID in the cast.
             ds.seek(12);
             const minMember = ds.readInt16();
             const maxMember = ds.readInt16();
 
-            // Offset 30 (int16): defaultPalette.member - Used for standard movies.
-            // ScummVM logic: If ID <= 0, it refers to a built-in platform palette.
-            ds.seek(30);
-            let paletteId = ds.readInt16();
+            // Extract Director File Version for structure offsets
+            ds.seek(2);
+            const fileVersion = ds.readUint16();
+
+            let version = fileVersion;
+            // Post D3 Check: The version field was added in D3 at offset 36
+            if (data.length > 38) {
+                ds.seek(36);
+                version = ds.readInt16();
+            }
+
+            let paletteId = -1; // Default to Macintosh System Palette
+
+            // kFileVer400 (0x400) to kFileVer500 (0x4B1)
+            if (version >= 0x400 && version < 0x4B1) {
+                if (data.length >= 50) {
+                    ds.seek(48);
+                    paletteId = ds.readInt16();
+                    if (paletteId <= 0) paletteId -= 1;
+                }
+            } else if (version >= 0x4B1) { // kFileVer500+
+                if (data.length >= 58) {
+                    ds.seek(56);
+                    paletteId = ds.readInt16();
+                    if (paletteId <= 0) paletteId -= 1;
+                }
+            }
+
             // Normalize built-in palette IDs via centralized helper
             paletteId = Palette.normalizePaletteId(paletteId);
 

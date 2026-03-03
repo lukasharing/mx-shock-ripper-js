@@ -48,25 +48,51 @@ class CastManager {
             }
         }
 
-        this.applyHeuristics();
+        this.assignTypes();
     }
 
     /**
-     * Initial Type Heuristics (Pre-enrichment)
+     * Deterministic Type Assignment (Pre-enrichment)
+     * Assigns MemberType based strictly on the presence of authoritative data chunks.
+     * Replaces previous heuristic guesses with 1:1 chunk-to-type mappings.
      */
-    applyHeuristics() {
+    assignTypes() {
         const metadata = this.extractor.metadataManager;
         for (const member of this.members) {
             const map = metadata.keyTable[member.id];
             if (map) {
-                if (map[Magic.BITD] || map[Magic.ABMP] || map[Magic.DIB] || map[Magic.PIXL]) member.typeId = MemberType.Bitmap;
+                // Image / Bitmap
+                if (map[Magic.BITD] || map[Magic.ABMP] || map[Magic.DIB] || map[Magic.PIXL] || map[Magic.ILBM]) member.typeId = MemberType.Bitmap;
+                // Palette
                 else if (map[Magic.CLUT] || map[Magic.Palt] || map[Magic.palt_lower] || map[Magic.PALT_UPPER]) member.typeId = MemberType.Palette;
+                // Text
                 else if (map[Magic.STXT] || map[Magic.text_lower] || map[Magic.TXTS]) member.typeId = MemberType.Text;
+                // Script
                 else if (map[Magic.Lscl] || map[Magic.LSCR] || map[Magic.LSCR_UPPER]) member.typeId = MemberType.Script;
+                // Sound
                 else if (map[Magic.SND] || map[Magic.snd] || map[Magic.SND_STAR]) member.typeId = MemberType.Sound;
+                // Xtra
                 else if (map[Magic.XTRA] || map[Magic.XTCL]) member.typeId = MemberType.Xtra;
+                // Shape
                 else if (map[Magic.SHAP]) member.typeId = MemberType.Shape;
+                // Font
                 else if (map[Magic.FONT] || map[Magic.VWFT]) member.typeId = MemberType.Font;
+                // Digital Video
+                else if (map[Magic.MooV] || map[Magic.VdM]) member.typeId = MemberType.DigitalVideo;
+                // Flash
+                else if (map[Magic.Flas]) member.typeId = MemberType.Flash;
+                // Transitions
+                else if (Object.keys(map).some(k => k.startsWith('Fx'))) member.typeId = MemberType.Transition;
+                // Cursor
+                else if (map[Magic.MCrs]) member.typeId = MemberType.Bitmap; // Cursors are typically bitmaps
+                // Picture
+                else if (map[Magic.PICT]) member.typeId = MemberType.Picture;
+            }
+            // Deterministic structural association:
+            // If the member ID is explicitly mapped as a Script inside an Lctx (ScriptContext) block,
+            // it is structurally defined as a Script by the engine, regardless of missing CASt chunk.
+            if (Object.values(metadata.lctxMap).includes(member.id) || Object.keys(metadata.lctxMap).includes(member.id.toString())) {
+                member.typeId = MemberType.Script;
             }
         }
     }
@@ -94,7 +120,12 @@ class CastManager {
         const orphans = [];
 
         // 1. Metadata Reconstruction & Orphan Detection
-        const contentTags = [Magic.BITD, Magic.ABMP, Magic.SND, Magic.DIB, Magic.PIXL, Magic.STXT, Magic.TXTS, Magic.CLUT, Magic.PALT_UPPER, Magic.medi, Magic.snd, Magic.ABMP, Magic.bitd_lower, Magic.text_lower, Magic.PMBA, Magic.ediM, 'SND*', Magic.manL, Magic.rcsL];
+        const contentTags = [
+            Magic.LSCR, Magic.Lscl, Magic.BITD, Magic.ABMP, Magic.SND, Magic.DIB, Magic.PIXL,
+            Magic.STXT, Magic.TXTS, Magic.CLUT, Magic.PALT_UPPER, Magic.medi, Magic.snd,
+            Magic.ABMP, Magic.bitd_lower, Magic.text_lower, Magic.PMBA, Magic.ediM, 'SND*',
+            Magic.manL, Magic.rcsL, Magic.MooV, Magic.VdM, Magic.Flas, Magic.MCrs, Magic.PICT
+        ];
 
         const chunks = this.extractor.dirFile.chunks;
         await Promise.all(chunks.map(async (chunk) => {
@@ -107,7 +138,7 @@ class CastManager {
                 if (member && !this.getMemberById(member.id)) {
                     this.members.push(member);
                 }
-            } else if (contentTags.includes(normalized) || contentTags.includes(trimmed)) {
+            } else if (contentTags.includes(normalized) || contentTags.includes(trimmed) || normalized.startsWith('Fx')) {
                 orphans.push({ chunk, tag: normalized });
             }
         }));
@@ -117,19 +148,31 @@ class CastManager {
         // not explicitly linked in the KEY* table but share a Resource ID or Slot ID.
         for (const orphan of orphans) {
             const { chunk, tag } = orphan;
-            const memberId = metadata.resToMember[chunk.id] || chunk.id;
+
+            const logicalId = (metadata.invFmap && metadata.invFmap[chunk.id] !== undefined) ? metadata.invFmap[chunk.id] : chunk.id;
+            const memberId = metadata.resToMember[logicalId] || logicalId;
+
+            // Scripts (LSCR) are mapped via LCTX, not KEY* table or 1:1 ID matching.
+            if (tag === Magic.LSCR || tag === Magic.Lscl) {
+                continue; // Do not create phantom skeleton members for LSCR
+            }
+
             let member = this.getMemberById(memberId);
 
             if (!member && memberId > 0 && memberId < Limits.MaxCastSlots) {
-                // Heuristic Recovery: Create skeleton if metadata is missing but content exists
+                // Structural Recovery: Create skeleton if metadata is missing but deterministic content exists
                 let initialType = MemberType.Null;
-                if (tag === Magic.BITD || tag === Magic.ABMP || tag === Magic.DIB || tag === Magic.bitd_lower || tag === Magic.ABMP || tag === Magic.PIXL || tag === Magic.rcsL) initialType = MemberType.Bitmap;
+                if (tag === Magic.BITD || tag === Magic.ABMP || tag === Magic.DIB || tag === Magic.bitd_lower || tag === Magic.PIXL || tag === Magic.rcsL || tag === Magic.MCrs) initialType = MemberType.Bitmap;
                 else if (tag === Magic.STXT || tag === Magic.TXTS || tag === Magic.text_lower) initialType = MemberType.Text;
                 else if (tag === Magic.CLUT || tag === Magic.PALT_UPPER || tag === Magic.palt_lower) initialType = MemberType.Palette;
                 else if (tag === Magic.SND || tag === Magic.snd || tag === 'SND*') initialType = MemberType.Sound;
                 else if (tag === Magic.SHAP) initialType = MemberType.Shape;
                 else if (tag === Magic.XTRA || tag === Magic.XTCL) initialType = MemberType.Xtra;
                 else if (tag === Magic.FONT || tag === Magic.VWFT) initialType = MemberType.Font;
+                else if (tag === Magic.MooV || tag === Magic.VdM) initialType = MemberType.DigitalVideo;
+                else if (tag === Magic.Flas) initialType = MemberType.Flash;
+                else if (tag === Magic.PICT) initialType = MemberType.Picture;
+                else if (tag.startsWith('Fx')) initialType = MemberType.Transition;
                 else if (tag === Magic.manL) initialType = MemberType.Null; // manL is an Afterburner LNAM (name table) chunk, not a palette
 
                 member = new CastMember(memberId, null, {
@@ -140,6 +183,23 @@ class CastManager {
             }
 
             if (member) {
+                // Deterministic Script Type Parsing (No Heuristics)
+                if (tag === Magic.LSCR || tag === Magic.Lscl) {
+                    try {
+                        const data = await this.extractor.dirFile.getChunkData(chunk);
+                        if (data && data.length >= 42) {
+                            const flags = data.readUInt32BE(38);
+                            // Explicit mapping based on engine's Structural bitmasks (Director architecture)
+                            if (flags & 8) member.scriptType = 2;      // Parent
+                            else if (flags & 4) member.scriptType = 1; // Behavior
+                            else if (flags & 2) member.scriptType = 3; // Movie
+                            else member.scriptType = 0;                // Legacy Global/Movie
+                        }
+                    } catch (e) {
+
+                    }
+                }
+
                 // Map Afterburner aliases to standard tags for the extractor
                 let finalTag = tag;
                 if (tag === Magic.ABMP || tag === Magic.PMBA || tag === Magic.DIB || tag === Magic.bitd_lower) finalTag = Magic.BITD;
@@ -151,24 +211,12 @@ class CastManager {
                 if (!metadata.keyTable[member.id]) metadata.keyTable[member.id] = {};
                 if (!metadata.keyTable[member.id][finalTag]) {
                     metadata.keyTable[member.id][finalTag] = chunk.id;
-                    this.extractor.log('DEBUG', `[FullGlobalScan] Linked orphan chunk ${chunk.type} (${finalTag}) ${chunk.id} to member ${member.id}`);
+
                 }
             }
         }
 
-        // 3. Proactive Naming Pass (Afterburner Orphan Recovery)
-        if (metadata.nameTable && metadata.nameTable.length > 0) {
-            for (const member of this.members) {
-                if (member.name.startsWith('member_')) {
-                    // In Afterburner, the name table index often matches the member ID - 1
-                    const recoveredName = metadata.nameTable[member.id - 1];
-                    if (recoveredName) {
-                        this.extractor.log('DEBUG', `[CastManager] Recovered name for orphan ${member.id}: ${recoveredName}`);
-                        member.name = recoveredName;
-                    }
-                }
-            }
-        }
+        // 3. Proactive Naming Pass removed because nameTable represents Lingo variable names and does not correlate with member IDs.
     }
 
     getMemberById(id) {

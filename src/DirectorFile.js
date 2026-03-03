@@ -26,6 +26,7 @@ class DirectorFile {
         this.cachedViews = {};
         this.isAfterburned = false;
         this.ilsBodyOffset = 0;
+        this._ilsBody = null; // Decoupled uncompressed ILS stream (Afterburned files)
         this.format = 'unknown';
         this.fmap = null;
         this.subtype = null;
@@ -62,7 +63,7 @@ class DirectorFile {
          * For Afterburned files, standard catalogs are often encrypted or hidden,
          * requiring a robust multi-pass search across potential catalog chunks.
          */
-        this.log('DEBUG', `DirectorFile.parse: Starting parsing (Size: ${this.fileSize})`);
+
         if (!this.ds) return;
         const magic = this.ds.readFourCC();
         const size = this.ds.readUint32();
@@ -232,29 +233,57 @@ class DirectorFile {
             // Robust search for FGDC sub-chunks: Fver, Fmap, Fcdr, Abmp, Fgei
             while (this.ds.position + 8 < this.ds.length) {
                 const tag = DirectorFile.unprotect(this.ds.peekFourCC());
-                if (tag === Magic.FVER) await this._parseFver();
-                else if (tag === Magic.FMAP) await this._parseFmap();
-                else if (tag === Magic.FCDR) await this._parseFcdr();
-                else if ([Magic.ABMP, Magic.PMBA].includes(tag) || tag.toUpperCase() === Magic.ABMP.toUpperCase()) await this._parseAbmp();
-                else if (tag === Magic.ILS || tag === Magic.ILS_REV) {
+                const pos = this.ds.position;
+                if (tag === Magic.FVER) {
+                    await this._parseFver();
+                } else if (tag === Magic.FMAP) {
+                    await this._parseFmap();
+                } else if (tag === Magic.FCDR) {
+                    await this._parseFcdr();
+                } else if ([Magic.ABMP, Magic.PMBA].includes(tag) || tag.toUpperCase() === Magic.ABMP.toUpperCase()) {
+                    await this._parseAbmp();
+                } else if (tag === Magic.ILS || tag === Magic.ILS_REV) {
                     this._parseILS();
                 } else if (tag === Magic.FGEI || tag === Magic.IEGF) {
                     await this._parseFgei();
-                    break; // FGEI is followed by the Inline Stream (binary data), stop searching tags
+                    break;
                 } else if ([Magic.FGDC, Magic.FGDM, Magic.CDGF, Magic.MDGF].includes(tag)) {
-                    // Enter Afterburner container chunk
-                    this.ds.readFourCC(); // Skip tag
-                    this.ds.readUint32(); // Skip size (standard RIFX chunk size)
-                    // Continue loop inside the chunk
+                    this.ds.readFourCC();
+                    this.ds.readUint32();
                 } else {
-                    // Skip unknown tag (some files have stray padding or metadata chunks)
                     this.ds.skip(4);
                     const len = this.ds.readVarInt();
                     this.ds.skip(len);
                 }
+
             }
 
             await this._autoDetectEndianness();
+
+            if (!this.fmap) {
+                const fmapChunk = this.chunks.find(c => DirectorFile.unprotect(c.type).toUpperCase() === Magic.FMAP.toUpperCase());
+                if (fmapChunk) {
+                    const data = await this.getChunkData(fmapChunk);
+                    if (data && data.length > 0) {
+                        const fmapDS = new DataStream(data, this.ds.endianness);
+                        this.fmap = {};
+                        try {
+                            const possibleTag = fmapDS.peekFourCC();
+                            if (DirectorFile.unprotect(possibleTag).toUpperCase() === Magic.FMAP.toUpperCase()) {
+                                fmapDS.readFourCC();
+                                fmapDS.readVarInt();
+                            }
+                            while (fmapDS.position < fmapDS.length) {
+                                const logicalId = fmapDS.readVarInt();
+                                const physicalId = fmapDS.readVarInt();
+                                this.fmap[logicalId] = physicalId;
+                            }
+                        } catch (e) {
+                            this.log('ERROR', `Failed parsing isolated FMAP chunk: ${e.message}`);
+                        }
+                    }
+                }
+            }
         } catch (e) {
             this.log('ERROR', `Failed to calculate afterburned structure: ${e.message}`);
             throw e;
@@ -317,7 +346,7 @@ class DirectorFile {
             // ("Macromedia ziplib compression...") instead of actual catalog entries.
             const headerStr = rawDecomp.slice(0, 128).toString('ascii');
             if (headerStr.includes('Macromedia')) {
-                this.log('DEBUG', 'FCDR contains metadata string, skipping as catalog.');
+
                 return;
             }
 
@@ -354,6 +383,7 @@ class DirectorFile {
             abmpDS.readVarInt(); // v2
             const resCount = abmpDS.readVarInt();
 
+
             for (let i = 0; i < resCount; i++) {
                 const resId = abmpDS.readVarInt();
                 const offset = abmpDS.readVarInt();
@@ -382,8 +412,17 @@ class DirectorFile {
         if (tag === Magic.FGEI || tag === Magic.IEGF) {
             this.ds.readFourCC();
             const ilsIndex = this.ds.readVarInt();
-            this.log('DEBUG', `FGEI points to ILS directory index: ${ilsIndex}`);
+
             this.ilsBodyOffset = this.ds.position;
+            try {
+                // Peek the rest of the stream as the ILS body
+                this._ilsBody = this.ds.readBytes(this.ds.length - this.ds.position);
+                // Seek back so we don't break subsequent parsing (though FGEI is usually last)
+                this.ds.seek(this.ilsBodyOffset);
+            } catch (e) {
+                this.log('WARNING', `Could not capture _ilsBody: ${e.message}`);
+                this._ilsBody = null;
+            }
             const ilsInfo = this.chunks[ilsIndex];
             if (ilsInfo) {
                 await this.loadInlineStream(ilsInfo);
@@ -400,11 +439,20 @@ class DirectorFile {
                 this.log('WARNING', `Could not get data for ILS directory chunk ${ilsInfo.id}`);
                 return;
             }
+            this._ilsBody = decomp; // Store decompressed ILS body for workers
             const ilsDS = new DataStream(decomp, this.ds.endianness);
             while (ilsDS.position < ilsDS.length) {
+                const entryPos = ilsDS.position;
                 const resId = ilsDS.readVarInt();
+                const dataPos = ilsDS.position;
                 const chunkInfo = this.chunks.find(c => c.id === resId);
+
                 if (chunkInfo) {
+                    chunkInfo.isIlsResident = true;
+                    if (chunkInfo.off === -1 || chunkInfo.off === 4294967295) {
+                        chunkInfo.off = dataPos;
+                    }
+
                     if (chunkInfo.len > Limits.InternalStreamSafetyLimit) {
                         this.log('WARNING', `Chunk ${resId} too large for ILS: ${chunkInfo.len}`);
                         break;
@@ -415,6 +463,7 @@ class DirectorFile {
                     }
                     this.cachedViews[resId] = ilsDS.readBytes(chunkInfo.len);
                 } else {
+
                     break;
                 }
             }
@@ -435,8 +484,15 @@ class DirectorFile {
 
         let data;
         try {
-            this.ds.seek(this.isAfterburned ? (this.ilsBodyOffset + chunk.off) : (chunk.off + 8));
-            const raw = this.ds.readBytes(chunk.len);
+            let raw;
+            if (this.isAfterburned && chunk.isIlsResident && this._ilsBody) {
+                raw = this._ilsBody.slice(chunk.off, chunk.off + chunk.len);
+            } else {
+                this.ds.seek(this.isAfterburned ? (this.ilsBodyOffset + chunk.off) : (chunk.off + 8));
+                raw = this.ds.readBytes(chunk.len);
+            }
+
+            if (!raw) return null;
 
             if (chunk.compType === 1 || (chunk.uncompLen > 0 && chunk.uncompLen !== chunk.len)) {
                 try {

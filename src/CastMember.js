@@ -13,8 +13,9 @@ class CastMember {
     constructor(id, chunk, properties = {}) {
         this.id = id;
         this.chunk = chunk;
+        // The typeId setter will automatically update this.type
         this.typeId = properties.typeId || 0;
-        this.type = properties.type || CastMember.getTypeName(this.typeId);
+        if (properties.type) this.type = properties.type;
         this.name = properties.name || '';
 
         // Geometric Properties
@@ -56,23 +57,38 @@ class CastMember {
         this.mergeProperties(properties);
     }
 
+    get typeId() {
+        return this._typeId;
+    }
+
+    set typeId(val) {
+        this._typeId = val;
+        this.type = CastMember.getTypeName(val);
+    }
+
     /**
-     * Smart property merging that respects current non-default values.
+     * Smart property merging that respects current non-default values and prioritizes latest specifications.
      */
     mergeProperties(properties) {
         if (!properties) return;
+
         for (const [k, v] of Object.entries(properties)) {
-            if (v !== undefined && v !== null) {
-                // Priority Merging Strategy:
-                // 1. If currently 0/8 or default, always take the new value.
-                // 2. If it's a generic "member_ID" name, allow overwriting with a descriptive name.
-                const isGenericName = k === 'name' && this[k] && this[k].startsWith('member_');
-                if (this[k] === 0 || this[k] === 8 || !this[k] || isGenericName) {
-                    this[k] = v;
-                } else if (k === 'width' || k === 'height' || k === 'bitDepth' || k === 'typeId' || k === 'type') {
-                    // Always overwrite critical fields IF the new value is non-zero
-                    if (v && v !== 0 && v !== 8) this[k] = v;
-                } else if (this[k] === undefined) {
+            if (v === undefined || v === null) continue;
+
+            // Allow auto-generated placeholder names to be overwritten by real names
+            if (k === 'name' && typeof this[k] === 'string' && this[k].startsWith('member_')) {
+                this[k] = v;
+                continue;
+            }
+
+            const isCritical = ['width', 'height', 'bitDepth', 'typeId', '_typeId', 'type'].includes(k);
+            const isCurrentlyDefault = !this[k] || this[k] === 0;
+
+            // Update if current value is default/missing, OR if it's a critical field with a non-zero valid update
+            if (isCurrentlyDefault || (isCritical && v !== 0)) {
+                if (k === '_typeId') {
+                    this.typeId = v; // Trigger setter
+                } else {
                     this[k] = v;
                 }
             }
@@ -199,35 +215,61 @@ class CastMember {
             return ds.readBytes(end - start);
         };
 
-        let memberName = 'unknown';
         const res = {};
         for (let i = 0; i < offsets.length; i++) {
             const item = readItem(i);
-            if (item) {
+            if (!item || item.length === 0) continue;
 
-                // The provided snippet seems to be out of context for this method.
-                // It refers to `this.chunks` and `bitmapId` which are not available here.
-                // The instruction "Store rawSpec in the member object" has been handled in `fromChunk`.
-                // Keeping the original logic for parsing properties from the table.
-
-                if (i === 1 && item.length > 0) {
+            switch (i) {
+                case 0:
+                    res.scriptText = item.toString('utf8');
+                    break;
+                case 1:
                     const nameLen = item[0];
                     if (nameLen > 0 && nameLen < item.length) {
-                        memberName = item.slice(1, 1 + nameLen).toString('utf8').trim();
+                        const memberName = item.slice(1, 1 + nameLen).toString('utf8').trim();
                         if (memberName) res.name = memberName;
                     }
-                }
-
-                if (i === 0) res.scriptText = item.toString('utf8');
-                if (i === 4) res.comment = item.toString('utf8').trim();
-
-                if (i === 5 && item.length >= 2) {
-                    let pid = item.readInt16BE(0);
-                    // Normalize built-in palette IDs via centralized helper
-                    // 0 -> -1 (Mac System), -1 -> -2 (Rainbow), -2 -> -3 (Grayscale)
-                    res.paletteId = Palette.normalizePaletteId(pid);
-                }
-                if (i === 6 && item.length >= 2) res.bitDepth = item.readInt16BE(0);
+                    break;
+                case 4:
+                    res.comment = item.toString('utf8').trim();
+                    break;
+                case 5:
+                    if (item.length >= 2) {
+                        let pid = item.readInt16BE(0);
+                        res.paletteId = Palette.normalizePaletteId(pid);
+                    }
+                    break;
+                case 6:
+                    if (item.length >= 2) res.bitDepth = item.readInt16BE(0);
+                    break;
+                case 10:
+                    res.xtraDisplayName = item.toString('utf8').trim();
+                    break;
+                case 15:
+                    if (item.length === 16) {
+                        res.guid = item.toString('hex');
+                    }
+                    break;
+                case 16:
+                    res.mediaFormatName = item.toString('utf8').trim();
+                    break;
+                case 17:
+                    if (item.length >= 4) res.created = item.readInt32BE(0);
+                    break;
+                case 18:
+                    if (item.length >= 4) res.modifiedTime = item.readInt32BE(0);
+                    break;
+                case 19:
+                    res.modifiedBy = item.toString('utf8').trim();
+                    break;
+                case 20: // duplicate comment check (fallback)
+                    const c = item.toString('utf8').trim();
+                    if (c && !res.comment) res.comment = c;
+                    break;
+                case 21:
+                    if (item.length >= 4) res.imageQuality = item.readInt32BE(0);
+                    break;
             }
         }
 
@@ -264,7 +306,8 @@ class CastMember {
             modified: this.modified,
             loaded: this.loaded, // If available
             checksum: this.checksum,
-            format: this.format
+            format: this.format,
+            scriptFile: this.scriptFile
         };
 
         // Filter out null/undefined common fields

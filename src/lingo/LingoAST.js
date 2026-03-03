@@ -18,7 +18,14 @@ class Node {
         this.parent = null;
     }
     // To be overridden by subclasses
-    toString() { return ""; }
+    buildString(arr, indent = "") { }
+
+    // Fallback for isolated legacy calls if any remain
+    toString(indent = "") {
+        const arr = [];
+        this.buildString(arr, indent);
+        return arr.join("");
+    }
 }
 
 /**
@@ -42,8 +49,15 @@ class Block extends Node {
         }
     }
 
-    toString(indent = "") {
-        return this.statements.map(s => s.toString(indent)).filter(s => s !== "").join("\n");
+    buildString(arr, indent = "") {
+        for (let i = 0; i < this.statements.length; i++) {
+            const stmt = this.statements[i];
+            const startLen = arr.length;
+            stmt.buildString(arr, indent);
+            if (arr.length > startLen) {
+                arr.push("\n");
+            }
+        }
     }
 }
 
@@ -58,13 +72,15 @@ class Handler extends Node {
         this.block = new Block(this);
     }
 
-    toString() {
-        let s = `on ${this.name}`;
-        if (this.args.length > 0) s += " " + this.args.join(", ");
-        s += "\n";
-        s += this.block.toString("  ");
-        s += "\nend";
-        return s;
+    buildString(arr, indent = "") {
+        arr.push(`on ${this.name}`);
+        if (this.args.length > 0) {
+            arr.push(" ");
+            arr.push(this.args.join(", "));
+        }
+        arr.push("\n");
+        this.block.buildString(arr, indent + "  ");
+        arr.push("end");
     }
 }
 
@@ -73,7 +89,7 @@ class Handler extends Node {
  */
 class VarReference extends Node {
     constructor(name) { super(); this.name = name; }
-    toString() { return this.name; }
+    buildString(arr) { arr.push(this.name); }
 }
 
 /**
@@ -81,7 +97,7 @@ class VarReference extends Node {
  */
 class PropertyReference extends Node {
     constructor(name) { super(); this.name = name; }
-    toString() { return this.name; }
+    buildString(arr) { arr.push(this.name); }
 }
 
 /**
@@ -89,7 +105,7 @@ class PropertyReference extends Node {
  */
 class LocalVarReference extends Node {
     constructor(name) { super(); this.name = name; }
-    toString() { return this.name; }
+    buildString(arr) { arr.push(this.name); }
 }
 
 /**
@@ -97,7 +113,7 @@ class LocalVarReference extends Node {
  */
 class ParamReference extends Node {
     constructor(name) { super(); this.name = name; }
-    toString() { return this.name; }
+    buildString(arr) { arr.push(this.name); }
 }
 
 /**
@@ -105,25 +121,25 @@ class ParamReference extends Node {
  */
 class Literal extends Node {
     constructor(value) { super(); this.value = value; }
-    toString() { return String(this.value); }
+    buildString(arr) { arr.push(String(this.value)); }
 }
 
 class IntLiteral extends Literal { }
 class FloatLiteral extends Literal { }
 class StringLiteral extends Literal {
-    toString() {
-        if (!this.value) return '""';
+    buildString(arr) {
+        if (!this.value) { arr.push('""'); return; }
         // Lingo uses \r for newlines in string literals
         let escaped = String(this.value)
             .replace(/\\/g, '\\\\')  // Escape backslashes first
             .replace(/"/g, '\\"')    // Escape quotes
             .replace(/\r/g, '\\r')   // Escape carriage returns
             .replace(/\n/g, '\\r');  // Convert newlines to \r
-        return `"${escaped}"`;
+        arr.push(`"${escaped}"`);
     }
 }
 class SymbolLiteral extends Literal {
-    toString() { return `#${this.value}`; }
+    buildString(arr) { arr.push(`#${this.value}`); }
 }
 
 /**
@@ -131,7 +147,14 @@ class SymbolLiteral extends Literal {
  */
 class ListLiteral extends Node {
     constructor(items = []) { super(); this.items = items; }
-    toString() { return "[" + this.items.map(i => i.toString()).join(", ") + "]"; }
+    buildString(arr) {
+        arr.push("[");
+        for (let i = 0; i < this.items.length; i++) {
+            this.items[i].buildString(arr);
+            if (i < this.items.length - 1) arr.push(", ");
+        }
+        arr.push("]");
+    }
 }
 
 /**
@@ -139,13 +162,19 @@ class ListLiteral extends Node {
  */
 class PropListLiteral extends Node {
     constructor(items = []) { super(); this.items = items; }
-    toString() {
-        if (this.items.length === 0) return "[:]";
-        const res = [];
-        for (let i = 0; i < this.items.length; i += 2) {
-            res.push(`${this.items[i]?.toString()}: ${this.items[i + 1]?.toString()}`);
+    buildString(arr) {
+        if (this.items.length === 0) {
+            arr.push("[:]");
+            return;
         }
-        return "[" + res.join(", ") + "]";
+        arr.push("[");
+        for (let i = 0; i < this.items.length; i += 2) {
+            if (this.items[i]) this.items[i].buildString(arr);
+            arr.push(": ");
+            if (this.items[i + 1]) this.items[i + 1].buildString(arr);
+            if (i < this.items.length - 2) arr.push(", ");
+        }
+        arr.push("]");
     }
 }
 
@@ -154,6 +183,7 @@ class PropListLiteral extends Node {
  */
 class ArgListLiteral extends Node {
     constructor(value = []) { super(); this.value = value; }
+    buildString(arr) { } // ArgList should not be rendered directly, it's unpacked by caller
 }
 
 /**
@@ -161,8 +191,11 @@ class ArgListLiteral extends Node {
  */
 class AssignmentStatement extends Node {
     constructor(target, value) { super(); this.target = target; this.value = value; }
-    toString(indent = "") {
-        return `${indent}${this.target.toString()} = ${this.value.toString()}`;
+    buildString(arr, indent = "") {
+        arr.push(indent);
+        this.target.buildString(arr);
+        arr.push(" = ");
+        this.value.buildString(arr);
     }
 }
 
@@ -171,11 +204,23 @@ class AssignmentStatement extends Node {
  */
 class CallStatement extends Node {
     constructor(name, args) { super(); this.name = name; this.args = args; }
-    toString(indent = "") {
-        const argStr = (this.args instanceof ArgListLiteral) ? this.args.value.map(v => v.toString()).join(", ") : this.args?.toString();
-        // Lingo commands like 'put' or 'alert' don't require parentheses
+    buildString(arr, indent = "") {
+        arr.push(indent);
+        arr.push(this.name);
         const needsParens = !LingoConfig.COMMANDS_WITHOUT_PARENS.includes(this.name);
-        return `${indent}${this.name}${needsParens ? "(" : " "}${argStr}${needsParens ? ")" : ""}`;
+        arr.push(needsParens ? "(" : " ");
+
+        if (this.args instanceof ArgListLiteral) {
+            const vals = this.args.value;
+            for (let i = 0; i < vals.length; i++) {
+                vals[i].buildString(arr);
+                if (i < vals.length - 1) arr.push(", ");
+            }
+        } else if (this.args) {
+            this.args.buildString(arr);
+        }
+
+        if (needsParens) arr.push(")");
     }
 }
 
@@ -184,9 +229,24 @@ class CallStatement extends Node {
  */
 class ObjCallStatement extends Node {
     constructor(target, method, args) { super(); this.target = target; this.method = method; this.args = args; }
-    toString(indent = "") {
-        const argStr = (this.args instanceof ArgListLiteral) ? this.args.value.map(v => v.toString()).join(", ") : this.args?.toString();
-        return `${indent}${this.target.toString()}.${this.method}(${argStr})`;
+    buildString(arr, indent = "") {
+        arr.push(indent);
+        this.target.buildString(arr);
+        arr.push(".");
+        arr.push(this.method);
+        arr.push("(");
+
+        if (this.args instanceof ArgListLiteral) {
+            const vals = this.args.value;
+            for (let i = 0; i < vals.length; i++) {
+                vals[i].buildString(arr);
+                if (i < vals.length - 1) arr.push(", ");
+            }
+        } else if (this.args) {
+            this.args.buildString(arr);
+        }
+
+        arr.push(")");
     }
 }
 
@@ -195,29 +255,55 @@ class ObjCallStatement extends Node {
  */
 class BinaryOperator extends Node {
     constructor(op, left, right) { super(); this.op = op; this.left = left; this.right = right; }
-    toString() {
-        let l = this.left?.toString();
-        let r = this.right?.toString();
+    buildString(arr) {
+        const leftNeedsParens = (this.left instanceof BinaryOperator || this.left instanceof LogicalOperator);
+        const rightNeedsParens = (this.right instanceof BinaryOperator || this.right instanceof LogicalOperator);
 
-        // Recursively add parentheses for nested operation precedence
-        if (this.left instanceof BinaryOperator || this.left instanceof LogicalOperator) l = `(${l})`;
-        if (this.right instanceof BinaryOperator || this.right instanceof LogicalOperator) r = `(${r})`;
+        if (this.op === '.') {
+            if (leftNeedsParens) arr.push("(");
+            if (this.left) this.left.buildString(arr);
+            if (leftNeedsParens) arr.push(")");
+            arr.push(".");
+            if (rightNeedsParens) arr.push("(");
+            if (this.right) this.right.buildString(arr);
+            if (rightNeedsParens) arr.push(")");
+            return;
+        }
+        if (this.op === '[]') {
+            if (leftNeedsParens) arr.push("(");
+            if (this.left) this.left.buildString(arr);
+            if (leftNeedsParens) arr.push(")");
+            arr.push("[");
+            if (rightNeedsParens) arr.push("(");
+            if (this.right) this.right.buildString(arr);
+            if (rightNeedsParens) arr.push(")");
+            arr.push("]");
+            return;
+        }
 
-        // Dot operator (member access) doesn't have spaces
-        if (this.op === '.') return `${l}.${r}`;
-        if (this.op === '[]') return `${l}[${r}]`;
-        return `${l} ${this.op} ${r}`;
+        if (leftNeedsParens) arr.push("(");
+        if (this.left) this.left.buildString(arr);
+        if (leftNeedsParens) arr.push(")");
+        arr.push(` ${this.op} `);
+        if (rightNeedsParens) arr.push("(");
+        if (this.right) this.right.buildString(arr);
+        if (rightNeedsParens) arr.push(")");
     }
 }
 
 class LogicalOperator extends Node {
     constructor(op, left, right) { super(); this.op = op; this.left = left; this.right = right; }
-    toString() {
-        let l = this.left?.toString();
-        let r = this.right?.toString();
-        if (this.left instanceof LogicalOperator) l = `(${l})`;
-        if (this.right instanceof LogicalOperator) r = `(${r})`;
-        return `${l} ${this.op} ${r}`;
+    buildString(arr) {
+        const leftNeedsParens = (this.left instanceof LogicalOperator);
+        const rightNeedsParens = (this.right instanceof LogicalOperator);
+
+        if (leftNeedsParens) arr.push("(");
+        if (this.left) this.left.buildString(arr);
+        if (leftNeedsParens) arr.push(")");
+        arr.push(` ${this.op} `);
+        if (rightNeedsParens) arr.push("(");
+        if (this.right) this.right.buildString(arr);
+        if (rightNeedsParens) arr.push(")");
     }
 }
 
@@ -226,12 +312,18 @@ class LogicalOperator extends Node {
  */
 class NotOperator extends Node {
     constructor(expr) { super(); this.expr = expr; }
-    toString() { return `not ${this.expr.toString()}`; }
+    buildString(arr) {
+        arr.push("not ");
+        if (this.expr) this.expr.buildString(arr);
+    }
 }
 
 class InverseOperator extends Node {
     constructor(expr) { super(); this.expr = expr; }
-    toString() { return `-${this.expr.toString()}`; }
+    buildString(arr) {
+        arr.push("-");
+        if (this.expr) this.expr.buildString(arr);
+    }
 }
 
 /**
@@ -248,15 +340,18 @@ class IfStatement extends Node {
 
     setType(t) { this.type = t; }
 
-    toString(indent = "") {
-        let s = `${indent}if ${this.cond?.toString()} then\n`;
-        s += this.block1.toString(indent + "  ");
+    buildString(arr, indent = "") {
+        arr.push(indent); arr.push("if ");
+        if (this.cond) this.cond.buildString(arr);
+        arr.push(" then\n");
+
+        this.block1.buildString(arr, indent + "  ");
+
         if (this.type === 1) {
-            s += `\n${indent}else\n`;
-            s += this.block2.toString(indent + "  ");
+            arr.push(indent); arr.push("else\n");
+            this.block2.buildString(arr, indent + "  ");
         }
-        s += `\n${indent}end if`;
-        return s;
+        arr.push(indent); arr.push("end if");
     }
 }
 
@@ -275,11 +370,17 @@ class CaseStatement extends Node {
         this.branches.push(branch);
     }
 
-    toString(indent = "") {
-        let s = `${indent}case ${this.expr?.toString()} of\n`;
-        s += this.branches.map(b => b.toString(indent + "  ")).join("\n");
-        s += `\n${indent}end case`;
-        return s;
+    buildString(arr, indent = "") {
+        arr.push(indent); arr.push("case ");
+        if (this.expr) this.expr.buildString(arr);
+        arr.push(" of\n");
+
+        for (let i = 0; i < this.branches.length; i++) {
+            this.branches[i].buildString(arr, indent + "  ");
+            if (i < this.branches.length - 1) arr.push("\n");
+        }
+
+        arr.push("\n"); arr.push(indent); arr.push("end case");
     }
 }
 
@@ -290,16 +391,19 @@ class CaseBranch extends Node {
         this.block = new Block(this);
     }
 
-    toString(indent = "") {
-        let s = indent;
+    buildString(arr, indent = "") {
+        arr.push(indent);
         if (this.labels.length === 0) {
-            s += "otherwise:";
+            arr.push("otherwise:");
         } else {
-            s += this.labels.map(l => l.toString()).join(", ") + ":";
+            for (let i = 0; i < this.labels.length; i++) {
+                this.labels[i].buildString(arr);
+                if (i < this.labels.length - 1) arr.push(", ");
+            }
+            arr.push(":");
         }
-        s += "\n";
-        s += this.block.toString(indent + "  ");
-        return s;
+        arr.push("\n");
+        this.block.buildString(arr, indent + "  ");
     }
 }
 
@@ -315,11 +419,11 @@ class RepeatWithStatement extends Node {
         this.down = down;
         this.block = new Block(this);
     }
-    toString(indent = "") {
-        let s = `${indent}repeat with ${this.it} = ${this.start} ${this.down ? "down to" : "to"} ${this.end}\n`;
-        s += this.block.toString(indent + "  ");
-        s += `\n${indent}end repeat`;
-        return s;
+    buildString(arr, indent = "") {
+        arr.push(indent);
+        arr.push(`repeat with ${this.it} = ${this.start} ${this.down ? "down to" : "to"} ${this.end}\n`);
+        this.block.buildString(arr, indent + "  ");
+        arr.push(indent); arr.push("end repeat");
     }
 }
 
@@ -329,11 +433,12 @@ class RepeatWhileStatement extends Node {
         this.cond = cond;
         this.block = new Block(this);
     }
-    toString(indent = "") {
-        let s = `${indent}repeat while ${this.cond}\n`;
-        s += this.block.toString(indent + "  ");
-        s += `\n${indent}end repeat`;
-        return s;
+    buildString(arr, indent = "") {
+        arr.push(indent); arr.push("repeat while ");
+        if (this.cond) this.cond.buildString(arr);
+        arr.push("\n");
+        this.block.buildString(arr, indent + "  ");
+        arr.push(indent); arr.push("end repeat");
     }
 }
 
@@ -342,13 +447,22 @@ class RepeatWhileStatement extends Node {
  */
 class ReturnStatement extends Node {
     constructor(value) { super(); this.value = value; }
-    toString(indent = "") {
-        return `${indent}return ${this.value?.toString() || ""}`;
+    buildString(arr, indent = "") {
+        arr.push(indent); arr.push("return ");
+        if (this.value) this.value.buildString(arr);
     }
 }
 
 class ExitStatement extends Node {
-    toString(indent = "") { return `${indent}exit`; }
+    buildString(arr, indent = "") {
+        arr.push(indent); arr.push("exit");
+    }
+}
+
+class ExitRepeatStatement extends Node {
+    buildString(arr, indent = "") {
+        arr.push(indent); arr.push("exit repeat");
+    }
 }
 
 /**
@@ -362,12 +476,13 @@ class MemberExpression extends Node {
         this.castLib = castLib;
     }
 
-    toString() {
-        let s = `${this.type} ${this.id.toString()}`;
+    buildString(arr, indent = "") {
+        arr.push(`${this.type} `);
+        if (this.id) this.id.buildString(arr);
         if (this.castLib && this.castLib.toString() !== "0") {
-            s += ` of castLib ${this.castLib.toString()}`;
+            arr.push(` of castLib `);
+            this.castLib.buildString(arr);
         }
-        return s;
     }
 }
 
@@ -383,14 +498,22 @@ class ChunkExpression extends Node {
         this.base = base;
     }
 
-    toString() {
+    buildString(arr, indent = "") {
         const types = { 1: "char", 2: "word", 3: "item", 4: "line" };
-        const typeStr = types[this.type] || "chunk";
-        let range = this.start.toString();
-        if (this.end.toString() !== range) {
-            range += ` to ${this.end.toString()}`;
+        arr.push(types[this.type] || "chunk");
+        arr.push(" ");
+
+        const s = this.start.toString();
+        const e = this.end.toString();
+
+        if (this.start) this.start.buildString(arr);
+        if (s !== e) {
+            arr.push(" to ");
+            if (this.end) this.end.buildString(arr);
         }
-        return `${typeStr} ${range} of ${this.base.toString()}`;
+
+        arr.push(" of ");
+        if (this.base) this.base.buildString(arr);
     }
 }
 
@@ -399,7 +522,9 @@ class ChunkExpression extends Node {
  */
 class ERROR extends Node {
     constructor(msg) { super(); this.msg = msg; }
-    toString() { return `-- [DECOMPILE ERROR: ${this.msg}]`; }
+    buildString(arr, indent = "") {
+        arr.push(`-- [DECOMPILE ERROR: ${this.msg}]`);
+    }
 }
 
 module.exports = {
@@ -409,5 +534,5 @@ module.exports = {
     CallStatement, ObjCallStatement, BinaryOperator, LogicalOperator,
     NotOperator, InverseOperator, IfStatement, CaseStatement, CaseBranch,
     RepeatWithStatement, RepeatWhileStatement,
-    ReturnStatement, ExitStatement, MemberExpression, ChunkExpression, ERROR
+    ReturnStatement, ExitStatement, ExitRepeatStatement, MemberExpression, ChunkExpression, ERROR
 };

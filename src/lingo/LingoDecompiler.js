@@ -2,11 +2,8 @@
  * @version 1.4.2
  * LingoDecompiler.js
  * 
- * High-performance Lingo bytecode decompiler using a multi-phase 
- * control flow reconstruction and statement recovery algorithm.
- * 
- * See docs/doc/05_LingoDecompiler.md for technical details.
- * Ported from ProjectorRaysJS.
+ * A robust Lingo bytecode decompiler using multi-phase 
+ * control flow reconstruction and statement recovery.
  */
 
 const DataStream = require('../utils/DataStream');
@@ -53,9 +50,20 @@ class LingoDecompiler {
 
             /**
              * Resolves a bytecode ID to a name based on the calibrated shift.
+             * Uses a simple 2D map cache to bypass math and slow string allocations.
              */
+            const nameCache = { 'handle': [], 'global': [], 'movie_prop': [], 'global_prop': [] };
             const getName = (id, type) => {
-                if (!nameTable || nameTable.length === 0) return type.includes("prop") ? `p_${id}` : `n_${id}`;
+                let cacheGroup = nameCache[type];
+                if (!cacheGroup) { cacheGroup = []; nameCache[type] = cacheGroup; }
+                if (cacheGroup[id] !== undefined) return cacheGroup[id];
+
+                if (!nameTable || nameTable.length === 0) {
+                    const fallback = type.includes("prop") ? `p_${id}` : `n_${id}`;
+                    cacheGroup[id] = fallback;
+                    return fallback;
+                }
+
                 let shift = cal.hShift;
                 if (type === "global_prop") shift = cal.gShift;
                 else if (type === "movie_prop") shift = cal.mShift;
@@ -64,11 +72,12 @@ class LingoDecompiler {
                 const idx = (id - shift + (N * 50)) % N;
                 let name = nameTable[idx] || `u_${id}`;
 
-                // Common obfuscation overrides / hardcoded properties
                 if (id === LingoConfig.SPECIAL_IDS.TRACE_SCRIPT) name = 'traceScript';
                 if (id === LingoConfig.SPECIAL_IDS.PLAYER) name = '_player';
                 if (id === LingoConfig.SPECIAL_IDS.MOVIE) name = '_movie';
                 if (id === LingoConfig.SPECIAL_IDS.TYPE) name = 'type';
+
+                cacheGroup[id] = name;
                 return name;
             };
 
@@ -121,6 +130,7 @@ class LingoDecompiler {
                 // Sequential instruction processing
                 for (let i = 0; i < codes.length; i++) {
                     const bc = codes[i];
+                    context.index = i;
 
                     // Close control flow blocks if jump target reached
                     while (ast.currentBlock.endPos > 0 && bc.pos >= ast.currentBlock.endPos) {
@@ -129,13 +139,28 @@ class LingoDecompiler {
 
                     // Detection for 'otherwise' branch
                     if (context.activeCase && !context.activeCase.isOtherwiseActive) {
-                        // Enter otherwise if we are no longer in a branch block and not at a new peek/eq
-                        if (ast.currentBlock.parent === ast.root && bc.opcode !== 'peek' && bc.opcode !== 'pop' && context.activeCase.finalPos > 0 && bc.pos < context.activeCase.finalPos) {
-                            const otherwise = new AST.CaseBranch([]);
-                            otherwise.block.endPos = context.activeCase.finalPos;
-                            context.activeCase.addBranch(otherwise);
-                            context.activeCase.isOtherwiseActive = true;
-                            ast.enterBlock(otherwise.block);
+                        const isAtCaseLevel = ast.currentBlock.statements[ast.currentBlock.statements.length - 1] === context.activeCase;
+                        if (isAtCaseLevel && context.activeCase.finalPos > 0 && bc.pos < context.activeCase.finalPos) {
+                            // Look ahead to see if there is a jmpifz before the next absolute jump or the end of the case.
+                            // Case checks always consist of peek/push/eq/jmpifz.
+                            let hasJmpifz = false;
+                            for (let j = context.index; j < context.codes.length; j++) {
+                                const peekBc = context.codes[j];
+                                if (peekBc.pos >= context.activeCase.finalPos || peekBc.opcode === 'jmp') break;
+                                if (peekBc.opcode === 'jmpifz' || peekBc.opcode === 'jmp_if_z') {
+                                    hasJmpifz = true;
+                                    break;
+                                }
+                            }
+
+                            // Also skip standalone 'pop' which cleans up the peeked value before otherwise body
+                            if (!hasJmpifz && bc.opcode !== 'pop') {
+                                const otherwise = new AST.CaseBranch([]);
+                                otherwise.block.endPos = context.activeCase.finalPos;
+                                context.activeCase.addBranch(otherwise);
+                                context.activeCase.isOtherwiseActive = true;
+                                ast.enterBlock(otherwise.block);
+                            }
                         }
                     }
 
@@ -144,13 +169,13 @@ class LingoDecompiler {
                         context.activeCase = null;
                     }
 
-                    context.index = i;
                     try {
                         this._translate(bc, context);
                     } catch (e) {
                         // Skip corrupted/unrecognized instructions
                     }
                 }
+
 
                 scriptBlocks.push(ast.toString());
 
@@ -462,14 +487,19 @@ class LingoDecompiler {
             case 'ret':
                 let rv = stack.pop();
                 // Allow void returns (stack underflows) anywhere - they're valid Lingo patterns
-                if (rv instanceof AST.ERROR) {
-                    ast.addStatement(new AST.ReturnStatement(null));
+                if (rv && rv.constructor.name === 'ERROR') {
+                    const last = (ast.currentBlock.statements.length > 0) ? ast.currentBlock.statements[ast.currentBlock.statements.length - 1] : null;
+                    const isRet = last && (last.constructor.name === 'ReturnStatement' || (last.constructor.name === 'CallStatement' && last.name === 'return'));
+                    if (!isRet) {
+                        ast.addStatement(new AST.ReturnStatement(null));
+                    }
                     break;
                 }
                 if (rv instanceof AST.ArgListLiteral) rv = (rv.value.length === 1) ? rv.value[0] : rv;
-                if (rv?.toString() === '0' && ctx.index >= ctx.codes.length - 2) return;
-                const last = ast.currentBlock.statements[ast.currentBlock.statements.length - 1];
-                if (!(last instanceof AST.ReturnStatement)) {
+                const last = (ast.currentBlock.statements.length > 0) ? ast.currentBlock.statements[ast.currentBlock.statements.length - 1] : null;
+                const isRet = last && (last.constructor.name === 'ReturnStatement' || (last.constructor.name === 'CallStatement' && last.name === 'return'));
+
+                if (!isRet) {
                     ast.addStatement(new AST.ReturnStatement(rv));
                 }
                 break;
@@ -595,12 +625,22 @@ class LingoDecompiler {
                     if (callFn === 'me') stack.push(new AST.VarReference('me'));
                     else stack.push(metaVal);  // 'constant' case
                 } else {
-                    const callExpr = new AST.CallStatement(callFn, callArgs);
-                    // Check if the arglist was created with pusharglistnoret
-                    if (callArgs?.noRet) {
-                        ast.addStatement(callExpr);
-                    } else {
-                        stack.push(callExpr);
+                    let isDuplicateReturn = false;
+                    if (callFn === 'return') {
+                        const stmts = ast.currentBlock.statements;
+                        const last = stmts.length > 0 ? stmts[stmts.length - 1] : null;
+                        if (last && (last.constructor.name === 'ReturnStatement' || (last.constructor.name === 'CallStatement' && last.name === 'return'))) {
+                            isDuplicateReturn = true;
+                        }
+                    }
+                    if (!isDuplicateReturn) {
+                        const callExpr = new AST.CallStatement(callFn, callArgs);
+                        // Check if the arglist was created with pusharglistnoret
+                        if (callArgs?.noRet) {
+                            ast.addStatement(callExpr);
+                        } else {
+                            stack.push(callExpr);
+                        }
                     }
                 }
                 break;
@@ -669,7 +709,7 @@ class LingoDecompiler {
                 } break;
 
             case 'jmpifz': case 'jmp_if_z': {
-                const blockEnd = bc.pos + bc.len + bc.obj, condVal = stack.pop();
+                const blockEnd = bc.pos + bc.obj, condVal = stack.pop();
                 if (ctx.activeCase && condVal instanceof AST.BinaryOperator && condVal.op === '=') {
                     const branch = new AST.CaseBranch([condVal.right]);
                     branch.block.endPos = blockEnd;
@@ -703,12 +743,32 @@ class LingoDecompiler {
             }
 
             case 'jmp':
-                const jumpTarget = bc.pos + bc.len + bc.obj, nextBc = ctx.codes[ctx.index + 1];
+                const jumpTarget = bc.pos + bc.obj, nextBc = ctx.codes[ctx.index + 1];
+
+                let inLoop = false;
+                let currNode = ast.currentBlock;
+                while (currNode) {
+                    if (currNode.parent instanceof AST.RepeatWhileStatement || currNode.parent instanceof AST.RepeatWithStatement) {
+                        if (jumpTarget >= currNode.parent.block.endPos) {
+                            inLoop = true;
+                            break;
+                        }
+                    }
+                    currNode = currNode.parent ? currNode.parent.parent : null;
+                }
+
+                if (inLoop) {
+                    ast.addStatement(new AST.ExitRepeatStatement());
+                    break;
+                }
+
                 if (ast.currentBlock.parent instanceof AST.IfStatement) {
                     const si = ast.currentBlock.parent;
                     if (nextBc && nextBc.pos === ast.currentBlock.endPos) {
                         si.setType(1);
                         si.block2.endPos = jumpTarget;
+                        ast.exitBlock(); // exit block1
+                        ast.enterBlock(si.block2); // enter block2
                     }
                 } else if (ast.currentBlock.parent instanceof AST.CaseBranch) {
                     const branch = ast.currentBlock.parent;

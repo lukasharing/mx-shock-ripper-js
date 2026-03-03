@@ -31,6 +31,9 @@ const LingoDecompiler = require('./lingo/LingoDecompiler');
 const LnamParser = require('./lingo/LnamParser');
 const VectorShapeExtractor = require('./member/VectorShapeExtractor');
 const MovieExtractor = require('./member/MovieExtractor');
+const FlashExtractor = require('./extractor/FlashExtractor');
+const DigitalVideoExtractor = require('./extractor/DigitalVideoExtractor');
+const XtraExtractor = require('./extractor/XtraExtractor');
 const DataStream = require('./utils/DataStream');
 
 const { MemberType, Magic, Resources } = require('./Constants');
@@ -82,6 +85,9 @@ class DirectorExtractor extends BaseExtractor {
         this.lnamParser = new LnamParser(logProxy, this);
         this.vectorShapeExtractor = new VectorShapeExtractor(logProxy);
         this.movieExtractor = new MovieExtractor(logProxy);
+        this.flashExtractor = new FlashExtractor(logProxy);
+        this.digitalVideoExtractor = new DigitalVideoExtractor(logProxy);
+        this.xtraExtractor = new XtraExtractor(logProxy);
     }
 
     get members() {
@@ -153,11 +159,15 @@ class DirectorExtractor extends BaseExtractor {
             Magic.VCSH // VectorShape content tag
         ];
 
+        const seenIds = new Set();
         const processQueue = this.members.filter(m => {
+            if (seenIds.has(m.id)) return false;
+            seenIds.add(m.id);
+
             if (m.typeId === MemberType.Palette) return false;
 
             const map = this.metadataManager.keyTable[m.id] || {};
-            const isLctxScript = m.typeId === MemberType.Script && m.scriptId > 0;
+            const isLctxScript = m.typeId === MemberType.Script && (m.scriptId > 0 || this.metadataManager.lctxMap[m.id] !== undefined);
 
             if (Object.keys(map).length === 0 && !isLctxScript) return false;
 
@@ -169,7 +179,7 @@ class DirectorExtractor extends BaseExtractor {
 
             if (!hasPrimary && !hasContent && !isLctxScript) {
                 if (this.options.verbose) {
-                    this.log('DEBUG', `Skipping member ${m.id} (${m.name}): no content chunks found (Tags: ${tags.join(', ')})`);
+
                 }
                 return false;
             }
@@ -177,45 +187,23 @@ class DirectorExtractor extends BaseExtractor {
             return true;
         });
 
-        // Initialize persistent workers with accurate ILS offsets
-        const ilsOffsets = {};
-        if (this.dirFile.isAfterburned && this.dirFile.ilsBodyOffset > 0) {
-            const ilsChunk = this.dirFile.chunks.find(c => DirectorFile.unprotect(c.type) === Magic.ILS || c.id === 2);
-            if (ilsChunk) {
-                const data = await this.dirFile.getChunkData(ilsChunk);
-                if (data) {
-                    const ds = new DataStream(data, 'little');
-                    ds.seek(12);
-                    const ilsCount = ds.readUint32();
-                    ds.seek(21);
-                    for (let i = 0; i < ilsCount; i++) {
-                        if (ds.position + 12 > data.length) break;
-                        ds.skip(4); // Tag
-                        ds.skip(4); // Len
-                        const off = ds.readUint32();
-                        ilsOffsets[i] = this.dirFile.ilsBodyOffset + off;
-                    }
-                    this.log('DEBUG', `Recovered ${Object.keys(ilsOffsets).length} offsets from ILS table.`);
-                }
-            }
-        }
-
         const currentMembersJSON = path.join(this.outputDir, 'members.json');
-
         const workers = [];
         const taskQueue = [...processQueue];
         let remaining = processQueue.length;
 
         const workerChunks = [];
         for (const c of this.dirFile.chunks) {
-            const physOff = (this.dirFile.isAfterburned && ilsOffsets[c.off] !== undefined)
-                ? ilsOffsets[c.off]
-                : (this.dirFile.isAfterburned ? (this.dirFile.ilsBodyOffset + c.off) : (c.off + 8));
+            const physicalOffset = this.dirFile.isAfterburned
+                ? (this.dirFile.ilsBodyOffset + c.off)
+                : (c.off + 8);
 
             workerChunks.push({
                 id: c.id,
+                off: c.off,
                 len: c.len,
-                physicalOffset: physOff,
+                physicalOffset,
+                isIlsResident: c.isIlsResident,
                 compType: c.compType,
                 uncompLen: c.uncompLen,
                 type: DirectorFile.unprotect(c.type)
@@ -236,6 +224,7 @@ class DirectorExtractor extends BaseExtractor {
                     resToMember: this.metadataManager.resToMember || {},
                     isAfterburned: this.dirFile.isAfterburned,
                     ilsBodyOffset: this.dirFile.ilsBodyOffset,
+                    ilsBody: this.dirFile.isAfterburned ? this.dirFile._ilsBody : null,
                     options: {
                         verbose: this.options.verbose,
                         lasm: this.options.lasm,
@@ -257,7 +246,7 @@ class DirectorExtractor extends BaseExtractor {
                     }
                 }
             } catch (e) {
-                this.log('DEBUG', 'Could not load existing members.json for incremental check.');
+
             }
         }
 
@@ -278,6 +267,7 @@ class DirectorExtractor extends BaseExtractor {
                 } else if (msg.type === 'DONE') {
                     const m = this.members.find(mem => mem.id === msg.id);
                     if (m) {
+                        if (msg.renamed) m.name = msg.renamed;
                         m.checksum = msg.checksum;
                         m.scriptFile = msg.scriptFile;
                         m.width = msg.width;
@@ -334,7 +324,8 @@ class DirectorExtractor extends BaseExtractor {
                         paletteId: member.paletteId,
                         clutCastLib: member.clutCastLib,
                         _castFlags: member._castFlags,
-                        _initialRect: member._initialRect
+                        _initialRect: member._initialRect,
+                        rect: member.rect
                     },
                     outPathPrefix,
                     knownChecksum: this.metadataStore[member.id]?.checksum,
@@ -438,11 +429,13 @@ class DirectorExtractor extends BaseExtractor {
 
         const matchedChunkIds = new Set();
 
-        // Pass 1: Match via lctxMap (reliable — by scriptId or member id)
+        // Pass 1a: Match via lctxMap (scriptId ONLY - highly reliable)
         for (const script of scripts) {
-            const lscrId = (script.scriptId > 0 && this.metadataManager.lctxMap[script.scriptId])
-                ? this.metadataManager.lctxMap[script.scriptId]
-                : this.metadataManager.lctxMap[script.id];
+            let lscrId = 0;
+            if (script.scriptId > 0 && this.metadataManager.lctxMap[script.scriptId]) {
+                lscrId = this.metadataManager.lctxMap[script.scriptId];
+            }
+
             if (!lscrId) continue;
 
             const chunk = lscrChunks.find(c => c.id === lscrId);
@@ -455,10 +448,87 @@ class DirectorExtractor extends BaseExtractor {
             const decompiled = this.lingoDecompiler.decompile(data, this.metadataManager.nameTable, script.scriptType || 0, script.id, { lasm: this.options.lasm });
             const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
             if (source) {
-                const lsPath = path.join(this.outputDir, `${script.name}.ls`);
+                let finalName = script.name;
+                if (/^member_\d+$/.test(finalName)) {
+                    // Try deterministic naming from LSCR header (factoryId) at offset 46
+                    if (data && data.length >= 48) {
+                        const hLen = data.readUInt16BE(16);
+                        if (hLen >= 92) {
+                            const factoryId = data.readInt16BE(46);
+                            if (factoryId >= 0 && this.metadataManager.nameTable[factoryId]) {
+                                finalName = this.metadataManager.nameTable[factoryId];
+                                script.name = finalName;
+                            }
+                        }
+                    }
+
+                    if (/^member_\d+$/.test(finalName)) {
+                        // Heuristic sniffing fallback
+                        const match = String(source).match(/["']([a-zA-Z0-9_.-]+\.class)["']/i);
+                        if (match && match[1]) {
+                            finalName = match[1];
+                            script.name = finalName;
+                            this.log('INFO', `Heuristic algorithm renamed anonymous ${script.name} -> ${finalName}`);
+                        }
+                    }
+                }
+                const lsPath = path.join(this.outputDir, `${finalName}.ls`);
                 fs.writeFileSync(lsPath, source);
                 if (this.options.lasm && typeof decompiled === 'object' && decompiled.lasm) {
-                    fs.writeFileSync(path.join(this.outputDir, `${script.name}.lasm`), decompiled.lasm);
+                    fs.writeFileSync(path.join(this.outputDir, `${finalName}.lasm`), decompiled.lasm);
+                }
+                script.format = Resources.Formats.LS;
+            }
+        }
+
+        // Pass 1b: Fallback match via lctxMap (member id) for remaining unmatched scripts
+        const partiallyUnmatchedScripts = scripts.filter(s => !s.format);
+        for (const script of partiallyUnmatchedScripts) {
+            let lscrId = 0;
+            if (this.metadataManager.lctxMap[script.id]) {
+                lscrId = this.metadataManager.lctxMap[script.id];
+            }
+
+            if (!lscrId) continue;
+
+            const chunk = lscrChunks.find(c => c.id === lscrId);
+            if (!chunk || matchedChunkIds.has(chunk.id)) continue;
+            matchedChunkIds.add(chunk.id);
+
+            const data = await this.dirFile.getChunkData(chunk);
+            if (!data) continue;
+
+            const decompiled = this.lingoDecompiler.decompile(data, this.metadataManager.nameTable, script.scriptType || 0, script.id, { lasm: this.options.lasm });
+            const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
+            if (source) {
+                let finalName = script.name;
+                if (/^member_\d+$/.test(finalName)) {
+                    // Try deterministic naming from LSCR header (factoryId) at offset 46
+                    if (data && data.length >= 48) {
+                        const hLen = data.readUInt16BE(16);
+                        if (hLen >= 92) {
+                            const factoryId = data.readInt16BE(46);
+                            if (factoryId >= 0 && this.metadataManager.nameTable[factoryId]) {
+                                finalName = this.metadataManager.nameTable[factoryId];
+                                script.name = finalName;
+                            }
+                        }
+                    }
+
+                    if (/^member_\d+$/.test(finalName)) {
+                        // Heuristic sniffing fallback
+                        const match = String(source).match(/["']([a-zA-Z0-9_.-]+\.class)["']/i);
+                        if (match && match[1]) {
+                            finalName = match[1];
+                            script.name = finalName;
+                            this.log('INFO', `Heuristic algorithm renamed anonymous ${script.name} -> ${finalName}`);
+                        }
+                    }
+                }
+                const lsPath = path.join(this.outputDir, `${finalName}.ls`);
+                fs.writeFileSync(lsPath, source);
+                if (this.options.lasm && typeof decompiled === 'object' && decompiled.lasm) {
+                    fs.writeFileSync(path.join(this.outputDir, `${finalName}.lasm`), decompiled.lasm);
                 }
                 script.format = Resources.Formats.LS;
             }
@@ -475,10 +545,33 @@ class DirectorExtractor extends BaseExtractor {
                 const decompiled = this.lingoDecompiler.decompile(data, this.metadataManager.nameTable, unmatchedScripts[i].scriptType || 0, unmatchedScripts[i].id, { lasm: this.options.lasm });
                 const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
                 if (source) {
-                    const lsPath = path.join(this.outputDir, `${unmatchedScripts[i].name}.ls`);
+                    let finalName = unmatchedScripts[i].name;
+                    if (/^member_\d+$/.test(finalName)) {
+                        // Try deterministic naming from LSCR header (factoryId) at offset 46
+                        if (data && data.length >= 48) {
+                            const hLen = data.readUInt16BE(16);
+                            if (hLen >= 92) {
+                                const factoryId = data.readInt16BE(46);
+                                if (factoryId >= 0 && this.metadataManager.nameTable[factoryId]) {
+                                    finalName = this.metadataManager.nameTable[factoryId];
+                                    unmatchedScripts[i].name = finalName;
+                                }
+                            }
+                        }
+
+                        if (/^member_\d+$/.test(finalName)) {
+                            const match = String(source).match(/["']([a-zA-Z0-9_.-]+\.class)["']/i);
+                            if (match && match[1]) {
+                                finalName = match[1];
+                                unmatchedScripts[i].name = finalName;
+                                this.log('INFO', `Heuristic algorithm renamed anonymous ${unmatchedScripts[i].name} -> ${finalName}`);
+                            }
+                        }
+                    }
+                    const lsPath = path.join(this.outputDir, `${finalName}.ls`);
                     fs.writeFileSync(lsPath, source);
                     if (this.options.lasm && typeof decompiled === 'object' && decompiled.lasm) {
-                        fs.writeFileSync(path.join(this.outputDir, `${unmatchedScripts[i].name}.lasm`), decompiled.lasm);
+                        fs.writeFileSync(path.join(this.outputDir, `${finalName}.lasm`), decompiled.lasm);
                     }
                     unmatchedScripts[i].format = Resources.Formats.LS;
                 }

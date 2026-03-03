@@ -78,7 +78,7 @@ class MemberProcessor {
             // 3. Delegate to specialized extractors based on MemberType
             let result = null;
 
-            this.log('DEBUG', `[MemberProcessor] Processing ${member.name} (ID: ${member.id}, typeId: ${member.typeId})`);
+
 
             const typeId = member.typeId;
             if (typeId === MemberType.Bitmap) {
@@ -106,6 +106,12 @@ class MemberProcessor {
                 result = await this.extractor.vectorShapeExtractor.save(member.data, outPathPrefix + ".svg", member);
             } else if (typeId === MemberType.FilmLoop) {
                 result = await this.extractor.movieExtractor.save(member.data, outPathPrefix + ".json", member);
+            } else if (typeId === MemberType.DigitalVideo) {
+                result = await this.extractor.digitalVideoExtractor.extract(member.data, outPathPrefix + ".dat", member);
+            } else if (typeId === MemberType.Flash) {
+                result = await this.extractor.flashExtractor.extract(member.data, outPathPrefix + ".swf", member);
+            } else if (typeId === MemberType.Xtra) {
+                result = await this.extractor.xtraExtractor.extract(member.data, outPathPrefix + ".dat", member);
             } else {
                 if (member.data && member.data.length > 0) {
                     result = await this.extractor.genericExtractor.save(member.data, outPathPrefix + ".dat");

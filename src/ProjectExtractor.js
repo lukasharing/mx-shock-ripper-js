@@ -63,7 +63,7 @@ class ProjectExtractor {
                 try {
                     await this.loadCast(fullPath, false);
                 } catch (e) {
-                    this.log('DEBUG', `Failed to scan ${file} for palettes: ${e.message}`);
+
                 }
             }
         }
@@ -149,8 +149,23 @@ class ProjectExtractor {
         const data = await df.getChunkData(mcsl);
         if (!data) return;
 
-        // Extract potential paths, splitting by null/invalid characters
-        const rawStrings = data.toString('utf8').replace(/[^\x20-\x7E]/g, '\0').split('\0').filter(s => s.length > 2);
+        // Extract potential paths manually to avoid V8 RegExp OOM on massive chunks
+        const rawStrings = [];
+        let currentString = '';
+        for (let i = 0; i < data.length; i++) {
+            const byte = data[i];
+            if (byte >= 0x20 && byte <= 0x7E) {
+                currentString += String.fromCharCode(byte);
+            } else {
+                if (currentString.length > 2) {
+                    rawStrings.push(currentString);
+                }
+                currentString = '';
+            }
+        }
+        if (currentString.length > 2) {
+            rawStrings.push(currentString);
+        }
         const castList = [];
 
         for (const raw of rawStrings) {

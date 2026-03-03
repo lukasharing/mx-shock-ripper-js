@@ -49,6 +49,16 @@ class BitmapExtractor extends BaseExtractor {
             zlibAttempted: false
         };
 
+        if (dimSets.length === 0) {
+            this.log('WARNING', `Member ${member.name} has ${bitmapBuf.length} bytes of data but no dimensions. Extracting as RAW .dat file.`);
+            if (outputPath) {
+                const result = await this.saveFile(bitmapBuf, outputPath, Resources.Labels.Bitmap);
+                if (result) result.format = 'dat';
+                return result;
+            }
+            return bitmapBuf;
+        }
+
         const getMethodData = (name) => {
             if (name === 'Raw') return cache.raw;
             if (name === 'PackBits') {
@@ -124,8 +134,14 @@ class BitmapExtractor extends BaseExtractor {
             }
         }
 
+        // Gracefully handle intentionally empty/dummy sprites
+        if (bitmapBuf.length <= 16) {
+            this.log('DEBUG', `Skipping ${member.name}: Dummy/Empty sprite detected (Size: ${bitmapBuf.length} bytes)`);
+            return null;
+        }
+
         // Exhaustive fallback: try rare padding alignments or offset trials if standard ones fail.
-        this.log('ERROR', `No matching configuration found for ${member.name}. Tried all prioritized decompression/geometry combinations.`);
+        this.log('ERROR', `No matching configuration found for ${member.name}. Tried all prioritized decompression/geometry combinations. (Size: ${bitmapBuf.length})`);
         return null;
     }
 
