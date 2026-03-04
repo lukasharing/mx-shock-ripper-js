@@ -1,5 +1,5 @@
 /**
- * @version 1.4.2
+ * @version 1.4.9
  */
 const path = require('path');
 const { Magic } = require('../Constants');
@@ -564,8 +564,8 @@ class Palette {
         const searchId = resolvedId || linkId;
 
         // 3. Member Search (Use resolved searchId)
-        if (extractor && extractor.members) {
-            const target = extractor.members.find(m => m.id === searchId);
+        if (extractor && typeof extractor.getMemberById === 'function') {
+            const target = extractor.getMemberById(searchId);
             if (target) {
                 if (target.typeId === 4 || target.type === 'Palette' || target.format === 'pal') {
                     const data = target.palette?.data || target.palette || target.data;
@@ -588,37 +588,37 @@ class Palette {
                     }
                 }
             }
+        }
 
-            // 5. Cross-Cast Reference (Project Context)
-            if (extractor && extractor.projectContext) {
-                // Priority: Explicit clutCastLib, then linkId if it looks like a cross-cast reference
-                const externalMember = await extractor.projectContext.getMember(linkId, castLibId);
-                if (externalMember) {
-                    if (externalMember.typeId === 4 || externalMember.type === 'Palette' || externalMember.format === 'pal') {
-                        const data = externalMember.palette?.data || externalMember.palette || externalMember.data;
-                        const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
-                        if (pal) {
-                            member.palette = {
-                                id: externalMember.id,
-                                name: externalMember.name,
-                                castlib: externalMember.castlibName || 'external',
-                                traced: true,
-                                resolution: 'cross-cast',
-                                castLibId: castLibId
-                            };
-                            return pal;
-                        }
-                    } else if (externalMember.typeId === 1 || externalMember.type === 'Bitmap') {
-                        const borrowedPal = await this.tracePaletteChain(externalMember, extractor, platform, null, visited);
-                        if (borrowedPal) {
-                            member.palette = Object.assign({}, externalMember.palette, { traced: true, borrowedFrom: externalMember.name });
-                            return borrowedPal;
-                        }
+        // 5. Cross-Cast Reference (Project Context)
+        if (extractor && extractor.projectContext) {
+            // Priority: Explicit clutCastLib, then linkId if it looks like a cross-cast reference
+            const externalMember = await extractor.projectContext.getMember(linkId, castLibId);
+            if (externalMember) {
+                if (externalMember.typeId === 4 || externalMember.type === 'Palette' || externalMember.format === 'pal') {
+                    const data = externalMember.palette?.data || externalMember.palette || externalMember.data;
+                    const pal = data ? (Array.isArray(data) ? data : this.parseDirector(data)) : null;
+                    if (pal) {
+                        member.palette = {
+                            id: externalMember.id,
+                            name: externalMember.name,
+                            castlib: externalMember.castlibName || 'external',
+                            traced: true,
+                            resolution: 'cross-cast',
+                            castLibId: castLibId
+                        };
+                        return pal;
+                    }
+                } else if (externalMember.typeId === 1 || externalMember.type === 'Bitmap') {
+                    const borrowedPal = await this.tracePaletteChain(externalMember, extractor, platform, null, visited);
+                    if (borrowedPal) {
+                        member.palette = Object.assign({}, externalMember.palette, { traced: true, borrowedFrom: externalMember.name });
+                        return borrowedPal;
                     }
                 }
             }
-            return null;
         }
+        return null;
     }
 
     static getSystemPaletteName(id) {
@@ -713,10 +713,23 @@ class Palette {
         // Contextual Search: Preceding Palette in same cast
         // In Director, unresolved palette IDs (0/null) inherit from the nearest preceding
         // palette member in the cast ID sequence.
-        if (extractor?.members) {
-            const pals = extractor.members.filter(m => m.typeId === 4);
-            const preceding = pals.filter(m => m.id < member.id).sort((a, b) => b.id - a.id);
-            let internalPal = (preceding.length > 0) ? preceding[0] : null;
+        if (extractor?.castManager && typeof extractor.castManager.getSortedPalettes === 'function') {
+            const pals = extractor.castManager.getSortedPalettes();
+
+            // O(log N) binary search for the nearest preceding palette
+            let internalPal = null;
+            let low = 0;
+            let high = pals.length - 1;
+
+            while (low <= high) {
+                const mid = Math.floor((low + high) / 2);
+                if (pals[mid].id < member.id) {
+                    internalPal = pals[mid];
+                    low = mid + 1; // Look for a closer one
+                } else {
+                    high = mid - 1;
+                }
+            }
 
             // If no preceding palette, use the first palette in the cast
             if (!internalPal && pals.length > 0) {

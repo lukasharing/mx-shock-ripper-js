@@ -10,6 +10,8 @@ class CastManager {
     constructor(extractor) {
         this.extractor = extractor;
         this.members = [];
+        this.memberMap = new Map();
+        this._sortedPalettes = null;
     }
 
     /**
@@ -41,10 +43,12 @@ class CastManager {
         // Initialize member instances
         for (const memberId of discoveredIds) {
             if (memberId >= Limits.MaxCastSlots) continue;
-            if (!this.members.find(m => m.id === memberId)) {
-                this.members.push(new CastMember(memberId, null, {
+            if (!this.memberMap.has(memberId)) {
+                const member = new CastMember(memberId, null, {
                     name: `member_${memberId}`
-                }));
+                });
+                this.members.push(member);
+                this.memberMap.set(memberId, member);
             }
         }
 
@@ -135,8 +139,9 @@ class CastManager {
 
             if (normalized === Magic.CAST || normalized === Magic.CAS_STAR || normalized === 'CAS2') {
                 const member = await metadata.parseMemberMetadata(chunk);
-                if (member && !this.getMemberById(member.id)) {
+                if (member && !this.memberMap.has(member.id)) {
                     this.members.push(member);
+                    this.memberMap.set(member.id, member);
                 }
             } else if (contentTags.includes(normalized) || contentTags.includes(trimmed) || normalized.startsWith('Fx')) {
                 orphans.push({ chunk, tag: normalized });
@@ -180,6 +185,7 @@ class CastManager {
                     typeId: initialType
                 });
                 this.members.push(member);
+                this.memberMap.set(memberId, member);
             }
 
             if (member) {
@@ -220,7 +226,23 @@ class CastManager {
     }
 
     getMemberById(id) {
-        return this.members.find(m => m.id === id);
+        return this.memberMap.get(id) || null;
+    }
+
+    /**
+     * Returns a sorted list of palette members, cached for performance.
+     * Used by Palette.js for O(log N) nearest-preceding search.
+     */
+    getSortedPalettes() {
+        if (this._sortedPalettes) return this._sortedPalettes;
+        this._sortedPalettes = this.members
+            .filter(m => m.typeId === MemberType.Palette)
+            .sort((a, b) => a.id - b.id);
+        return this._sortedPalettes;
+    }
+
+    invalidateCache() {
+        this._sortedPalettes = null;
     }
 
     normalizeTag(tag) {

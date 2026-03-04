@@ -1,5 +1,5 @@
 /**
- * @version 1.4.8
+ * @version 1.4.9
  * ProjectExtractor.js - Multi-file orchestration & Global Resource Management
  * 
  * Handles the recursive discovery of linked cast libraries (.cct/.cst) and 
@@ -37,6 +37,7 @@ class ProjectExtractor {
         this.castCache = {};   // Metadata cache: [path] -> { chunks, memberMap, endianness, ilsBodyOffset, ilsBody }
         this.pendingCasts = {}; // Promise coalescing for loadCast
         this.pendingMembers = {}; // Promise coalescing for getMember
+        this.memberToCastMap = new Map(); // Global Member ID -> Cast Path mapping
         this.isReady = false;
     }
 
@@ -126,6 +127,7 @@ class ProjectExtractor {
                             const tag = ds.readFourCC();
                             if (!memberMap[castID]) memberMap[castID] = {};
                             memberMap[castID][tag] = sectionID;
+                            this.memberToCastMap.set(castID, absolutePath);
                         }
                     }
                 }
@@ -182,7 +184,17 @@ class ProjectExtractor {
             return await this.getMemberFromCast(this.loadedCasts[castLibId - 1], memberId);
         }
 
-        // Otherwise, search all loaded casts (prioritize the first one/entry movie)
+        // 1. O(1) Global Lookup via indexed map (High Performance)
+        if (this.memberToCastMap.has(memberId)) {
+            const castPath = this.memberToCastMap.get(memberId);
+            const cast = this.loadedCasts.find(c => c.path === castPath);
+            if (cast) {
+                const member = await this.getMemberFromCast(cast, memberId);
+                if (member) return member;
+            }
+        }
+
+        // 2. Fallback to iterative search (if not indexed yet)
         for (const cast of this.loadedCasts) {
             const member = await this.getMemberFromCast(cast, memberId);
             if (member) return member;
