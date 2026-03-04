@@ -107,6 +107,7 @@ class BitmapExtractor extends BaseExtractor {
                 const data = getMethodData(name);
                 if (!data || data.length === 0) continue;
                 this.log('DEBUG', `Trying depth ${d}, method ${name}, size ${data.length}`);
+                const actualLen = data.length;
 
                 for (const dims of dimSets) {
                     const baseRowBytes = Math.ceil(dims.w * d / 8);
