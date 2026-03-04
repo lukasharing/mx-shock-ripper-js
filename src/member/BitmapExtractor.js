@@ -62,11 +62,15 @@ class BitmapExtractor extends BaseExtractor {
         const getMethodData = (name) => {
             if (name === 'Raw') return cache.raw;
             if (name === 'PackBits') {
-                if (cache.pb === null) cache.pb = this.decodePackBits(bitmapBuf);
+                if (cache.pb === null) {
+                    this.log('DEBUG', `Decoding PackBits...`);
+                    cache.pb = this.decodePackBits(bitmapBuf);
+                }
                 return cache.pb;
             }
             if (name === 'Zlib') {
                 if (!cache.zlibAttempted) {
+                    this.log('DEBUG', `Decoding Zlib...`);
                     cache.zlib = this._tryZlib(bitmapBuf);
                     cache.zlibAttempted = true;
                 }
@@ -74,11 +78,15 @@ class BitmapExtractor extends BaseExtractor {
             }
             if (name === 'Zlib+PackBits') {
                 if (!cache.zlibAttempted) {
+                    this.log('DEBUG', `Decoding Zlib (for ZPB)...`);
                     cache.zlib = this._tryZlib(bitmapBuf);
                     cache.zlibAttempted = true;
                 }
                 if (!cache.zlib) return null;
-                if (cache.zpb === null) cache.zpb = this.decodePackBits(cache.zlib);
+                if (cache.zpb === null) {
+                    this.log('DEBUG', `Decoding PackBits from Zlib...`);
+                    cache.zpb = this.decodePackBits(cache.zlib);
+                }
                 return cache.zpb;
             }
             return null;
@@ -98,7 +106,7 @@ class BitmapExtractor extends BaseExtractor {
             for (const name of methodNames) {
                 const data = getMethodData(name);
                 if (!data || data.length === 0) continue;
-                const actualLen = data.length;
+                this.log('DEBUG', `Trying depth ${d}, method ${name}, size ${data.length}`);
 
                 for (const dims of dimSets) {
                     const baseRowBytes = Math.ceil(dims.w * d / 8);
