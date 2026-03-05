@@ -228,7 +228,8 @@ class DirectorExtractor extends BaseExtractor {
                         verbose: this.options.verbose,
                         lasm: this.options.lasm,
                         force: !!this.options.force,
-                        fast: !!this.options.fast
+                        fast: !!this.options.fast,
+                        colored: !!this.options.colored
                     }
                 }
             });
