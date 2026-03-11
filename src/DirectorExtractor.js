@@ -153,7 +153,7 @@ class DirectorExtractor extends BaseExtractor {
         const contentTags = [
             Magic.CAST, Magic.CAS_STAR, Magic.CArT, Magic.cast_lower,
             Magic.BITD, Magic.DIB, Magic.dib_star, Magic.bitd_lower,
-            Magic.STXT, Magic.stxt_lower, Magic.TXTS,
+            Magic.STXT, Magic.stxt_lower, Magic.TEXT, Magic.text_lower, Magic.TXTS,
             Magic.SND, Magic.snd_lower, Magic.snd_star,
             Magic.VCSH // VectorShape content tag
         ];
@@ -406,7 +406,7 @@ class DirectorExtractor extends BaseExtractor {
         switch (typeId) {
             case MemberType.Bitmap: return Magic.BITD;
             case MemberType.Text:
-            case MemberType.Field: return Magic.STXT;
+            case MemberType.Field: return Magic.STXT; // Prioritize STXT for metadata mapping, but TEXT is handled in worker
             case MemberType.Script: return Magic.LSCR;
             case MemberType.Sound: return Magic.SND;
             case MemberType.Shape:

@@ -68,7 +68,8 @@ const getChunkData = async (chunk) => {
         }
 
         // Decompression: try standard inflate -> raw inflate -> scan for 0x78 (prefix-friendly)
-        if (chunk.compType === 1 || (chunk.uncompLen > 0 && chunk.uncompLen !== chunk.len)) {
+        const isZlib = buf.length >= 2 && buf[0] === 0x78 && (buf[1] === 0x01 || buf[1] === 0x9c || buf[1] === 0xda);
+        if (chunk.compType === 1 || (chunk.uncompLen > 0 && chunk.uncompLen !== chunk.len) || isZlib) {
             try {
                 buf = zlib.inflateSync(buf);
             } catch (e) {
@@ -176,8 +177,13 @@ parentPort.on('message', async (task) => {
             return;
         }
 
-        const sectionId = (map && (map[Magic.CAST] || map[Magic.CAS_STAR] || map[Magic.CAsT] || map[Magic.cast_lower] ||
-            map[Magic.BITD] || map[Magic.ABMP] || map[Magic.STXT])) || (map ? Object.values(map)[0] : 0);
+        const sectionId = (map && (
+            map[Magic.STXT] || map[Magic.stxt_lower] ||
+            map[Magic.TEXT] || map[Magic.text_lower] ||
+            map[Magic.BITD] || map[Magic.ABMP] || map[Magic.DIB] ||
+            map[Magic.SND] || map[Magic.snd] || map[Magic.SND_STAR] ||
+            map[Magic.CAST] || map[Magic.CAS_STAR] || map[Magic.CAsT] || map[Magic.cast_lower]
+        )) || (map ? Object.values(map)[0] : 0);
 
         let data = null;
         if (sectionId > 0) {
@@ -229,7 +235,7 @@ parentPort.on('message', async (task) => {
         } else if (typeId === MemberType.Text || typeId === MemberType.Field) {
             const hasExt = (member.name || '').match(Resources.Regex.TextExtMatch);
             const ext = hasExt ? '' : '.rtf';
-            result = await textExtractor.save(data, outPathPrefix + ext, member, { useRaw: !!hasExt });
+            result = await textExtractor.save(data, outPathPrefix + ext, member, { useRaw: !!hasExt, chunkId: sectionId });
         } else if (typeId === MemberType.Shape) {
             result = await shapeExtractor.save(outPathPrefix + Resources.FileExtensions.SVG, member, palette);
         } else if (typeId === MemberType.Font) {

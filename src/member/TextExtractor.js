@@ -23,15 +23,22 @@ class TextExtractor extends GenericExtractor {
 
         let content = "";
 
+        // DEBUG
+        console.log(`[TextExtractor] Extracting chunk ${options.chunkId || 'N/A'}: ${buffer.length} bytes. First 8 bytes: ${buffer.slice(0, 8).toString('hex')} (useRaw: ${options.useRaw})`);
+
         // Detect modern 12-byte STXT header: [4:HdrSize][4:TxtSize][4:StyleSize]
+        // HeaderSize.Stxt should be 12. Check if the first 4 bytes match the header size.
         if (buffer.length >= HeaderSize.Stxt) {
             const ds = new DataStream(buffer, 'big');
             const headerSize = ds.readUint32();
             const textSize = ds.readUint32();
 
-            if (headerSize >= HeaderSize.Stxt && headerSize + textSize <= buffer.length) {
+            // Additional check: Does it look like an STXT chunk?
+            // Usually headerSize is 12 and textSize matches the rest of the buffer (excluding styles)
+            if (headerSize === HeaderSize.Stxt && headerSize + textSize <= buffer.length) {
                 content = buffer.slice(headerSize, headerSize + textSize).toString('utf8');
             } else {
+                // If it doesn't look like STXT, treat it as raw text
                 content = buffer.toString('utf8');
             }
         } else {

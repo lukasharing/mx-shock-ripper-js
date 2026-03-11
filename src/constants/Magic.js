@@ -72,6 +72,7 @@ module.exports = {
     ediM: 'ediM',
     bitd_lower: 'bitd',
     stxt_lower: 'stxt',
+    text_lower: 'text',
     abmc: 'abmc',
     manL: 'manL',
     XTCL: 'XTCL',

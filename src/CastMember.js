@@ -81,11 +81,15 @@ class CastMember {
                 continue;
             }
 
-            const isCritical = ['width', 'height', 'bitDepth', 'typeId', '_typeId', 'type'].includes(k);
-            const isCurrentlyDefault = !this[k] || this[k] === 0;
+            const isCurrentlyDefault = !this[k] ||
+                this[k] === 0 ||
+                (k === 'regPoint' && this[k].x === 0 && this[k].y === 0) ||
+                (k === 'rect' && this[k].top === 0 && this[k].left === 0 && this[k].bottom === 0 && this[k].right === 0);
+
+            const isCritical = ['width', 'height', 'bitDepth', 'typeId', '_typeId', 'type', 'regPoint', 'rect'].includes(k);
 
             // Update if current value is default/missing, OR if it's a critical field with a non-zero valid update
-            if (isCurrentlyDefault || (isCritical && v !== 0)) {
+            if (isCurrentlyDefault || isCritical) {
                 if (k === '_typeId') {
                     this.typeId = v; // Trigger setter
                 } else {

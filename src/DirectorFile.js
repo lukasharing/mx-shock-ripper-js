@@ -494,7 +494,8 @@ class DirectorFile {
 
             if (!raw) return null;
 
-            if (chunk.compType === 1 || (chunk.uncompLen > 0 && chunk.uncompLen !== chunk.len)) {
+            const isZlib = raw[0] === 0x78 && (raw[1] === 0x01 || raw[1] === 0x9c || raw[1] === 0xda);
+            if (chunk.compType === 1 || (chunk.uncompLen > 0 && chunk.uncompLen !== chunk.len) || isZlib) {
                 try {
                     data = zlib.inflateSync(raw);
                 } catch (e) {

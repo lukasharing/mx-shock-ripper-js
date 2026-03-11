@@ -50,10 +50,17 @@ class BitmapSpec {
         const height = Math.abs(initialRect.bottom - initialRect.top);
         const width = Math.abs(initialRect.right - initialRect.left);
 
+        // [Fix] Registration points are stored as absolute canvas coordinates.
+        // We normalize them to be relative to the bitmap's top-left.
+        const normalizedRegPoint = {
+            x: regX - initialRect.left,
+            y: regY - initialRect.top
+        };
+
         const res = {
             height: height || 1,
             width: width || 1,
-            regPoint: { x: regX, y: regY },
+            regPoint: normalizedRegPoint,
             paletteId: clutId,      // Map clutId to paletteId for compatibility
             clutCastLib,
             bitDepth: bitDepth || 8,
