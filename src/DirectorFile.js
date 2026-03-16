@@ -177,6 +177,8 @@ class DirectorFile {
         try {
             this.ds.seek(12);
             while (this.ds.position + 8 < this.ds.length) {
+                const rawTag = this.ds.peekFourCC();
+                const tag = DirectorFile.unprotect(rawTag);
                 // Director 8.5+ Afterburner stream parsing
                 
                 if (tag === Magic.FVER) await this._parseFver();
