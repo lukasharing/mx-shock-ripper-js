@@ -108,9 +108,7 @@ class DataStream {
 
     readFourCC() {
         const buf = this._readIntoBuf(4);
-        let res = buf.toString('ascii', 0, 4);
-        if (this.endianness === 'little') res = res.split('').reverse().join('');
-        return res;
+        return buf.toString('ascii', 0, 4);
     }
 
     peekFourCC() {
@@ -122,7 +120,6 @@ class DataStream {
         } else {
             res = this.buffer.toString('ascii', this.position, this.position + 4);
         }
-        if (this.endianness === 'little') res = res.split('').reverse().join('');
         return res;
     }
 

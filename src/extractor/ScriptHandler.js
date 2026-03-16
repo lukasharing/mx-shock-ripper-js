@@ -114,26 +114,8 @@ class ScriptHandler {
 
         this.extractor.log('INFO', `Member ID ${member.id}: Decompiling Bytecode from ${source}...`);
 
-        let names = this.extractor.metadataManager.nameTable;
-        if (chunk) {
-            const idx = this.extractor.dirFile.chunks.indexOf(chunk);
-            if (idx !== -1) {
-                for (let i = idx; i >= 0; i--) {
-                    const c = this.extractor.dirFile.chunks[i];
-                    const type = c.type.toUpperCase();
-                    if ([Magic.LNAM.toUpperCase(), AfterburnerTags.manL.toUpperCase()].includes(type)) {
-                        try {
-                            const lnamData = await this.extractor.dirFile.getChunkData(c);
-                            const localNames = this.extractor.lnamParser.parse(lnamData);
-                            if (localNames && Object.keys(localNames).length > 0) names = localNames;
-                        } catch (e) {
-                            this.extractor.log('WARNING', `Failed to parse Context Lnam ${c.id}: ${e.message}`);
-                        }
-                        break;
-                    }
-                }
-            }
-        }
+        const idx = this.extractor.dirFile.chunks.indexOf(chunk);
+        const names = this.extractor.metadataManager.getNameTableForScript(idx);
 
         const decompiled = this.extractor.lingoDecompiler.decompile(lscrData, names, member.scriptType, member.id, { lasm: this.extractor.options.lasm });
         const decompiledText = (typeof decompiled === 'object') ? decompiled.text || decompiled.source : decompiled;

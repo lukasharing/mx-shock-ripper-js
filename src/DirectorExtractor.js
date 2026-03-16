@@ -109,6 +109,7 @@ class DirectorExtractor extends BaseExtractor {
 
         const stats = fs.statSync(this.inputPath);
         const fd = fs.openSync(this.inputPath, 'r');
+        this.log('DEBUG', `Initializing DirectorFile: size=${stats.size}`);
         this.dirFile = new DirectorFile(fd, (lvl, msg) => this.log(lvl, msg), stats.size);
         try {
             await this.dirFile.parse();
@@ -121,6 +122,7 @@ class DirectorExtractor extends BaseExtractor {
         if (!fs.existsSync(this.outputDir)) fs.mkdirSync(this.outputDir, { recursive: true });
 
         // Phase 1: Structural Discovery & Key Metadata
+        this.log('DEBUG', 'Starting parseKeyTable phase...');
         await this.metadataManager.parseKeyTable();
         await this.metadataManager.parseMCsL();
         await this.metadataManager.parseNameTable();
@@ -209,6 +211,12 @@ class DirectorExtractor extends BaseExtractor {
             });
         }
 
+        let ilsBody = null;
+        if (this.dirFile.isAfterburned) {
+            const ilsChunk = this.dirFile.getChunksByType('ILS ')[0] || this.dirFile.getChunkById(2);
+            if (ilsChunk) ilsBody = await this.dirFile.getChunkData(ilsChunk);
+        }
+
         for (let i = 0; i < this.concurrency; i++) {
             const worker = new Worker(path.join(__dirname, 'extractor', 'ExtractionWorker.js'), {
                 workerData: {
@@ -223,7 +231,7 @@ class DirectorExtractor extends BaseExtractor {
                     resToMember: this.metadataManager.resToMember || {},
                     isAfterburned: this.dirFile.isAfterburned,
                     ilsBodyOffset: this.dirFile.ilsBodyOffset,
-                    ilsBody: this.dirFile.isAfterburned ? this.dirFile._ilsBody : null,
+                    ilsBody: ilsBody,
                     options: {
                         verbose: this.options.verbose,
                         lasm: this.options.lasm,
@@ -310,6 +318,20 @@ class DirectorExtractor extends BaseExtractor {
             const sendTask = async (worker, member) => {
                 const outPathPrefix = path.join(this.outputDir, (member.name || `member_${member.id}`).replace(/[/\\?%*:|"<>]/g, '_'));
 
+                if (member.typeId === MemberType.Script) {
+                    this.log('DEBUG', `Sending script member ${member.id} (${member.name}): sType=${member.scriptType}, chunkIndex=${member._chunkIndex}`);
+                }
+
+                let scriptChunkIndex = member._chunkIndex;
+                if (member.typeId === MemberType.Script && !scriptChunkIndex) {
+                    const lscrId = (member.scriptId > 0 && this.metadataManager.lctxMap[member.scriptId]) || 
+                                   (this.metadataManager.lctxMap[member.id]);
+                    if (lscrId) {
+                        const chunk = this.dirFile.getChunkById(lscrId);
+                        if (chunk) scriptChunkIndex = this.dirFile.chunks.indexOf(chunk);
+                    }
+                }
+
                 worker.postMessage({
                     type: 'PROCESS',
                     member: {
@@ -331,7 +353,10 @@ class DirectorExtractor extends BaseExtractor {
                     },
                     outPathPrefix,
                     knownChecksum: this.metadataStore[member.id]?.checksum,
-                    palette: member._resolvedPalette
+                    palette: member._resolvedPalette,
+                    nameTable: (member.typeId === MemberType.Script) 
+                        ? this.metadataManager.getNameTableForScript(this.dirFile.chunks[scriptChunkIndex]?.id) 
+                        : null
                 });
             };
 
@@ -454,7 +479,10 @@ class DirectorExtractor extends BaseExtractor {
             const data = await this.dirFile.getChunkData(chunk);
             if (!data) continue;
 
-            const decompiled = this.lingoDecompiler.decompile(data, this.metadataManager.nameTable, script.scriptType || 0, script.id, { lasm: this.options.lasm });
+            const scriptChunkIndex = this.dirFile.chunks.indexOf(chunk);
+            const resolvedNameTable = this.metadataManager.getNameTableForScript(chunk.id);
+
+            const decompiled = this.lingoDecompiler.decompile(data, resolvedNameTable, script.scriptType || 0, script.id, { lasm: this.options.lasm });
             const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
             if (source) {
                 let finalName = script.name;
@@ -507,7 +535,10 @@ class DirectorExtractor extends BaseExtractor {
             const data = await this.dirFile.getChunkData(chunk);
             if (!data) continue;
 
-            const decompiled = this.lingoDecompiler.decompile(data, this.metadataManager.nameTable, script.scriptType || 0, script.id, { lasm: this.options.lasm });
+            const scriptChunkIndex = this.dirFile.chunks.indexOf(chunk);
+            const resolvedNameTable = this.metadataManager.getNameTableForScript(chunk.id);
+
+            const decompiled = this.lingoDecompiler.decompile(data, resolvedNameTable, script.scriptType || 0, script.id, { lasm: this.options.lasm });
             const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
             if (source) {
                 let finalName = script.name;
@@ -551,7 +582,11 @@ class DirectorExtractor extends BaseExtractor {
             for (let i = 0; i < Math.min(unmatchedScripts.length, unmatchedChunks.length); i++) {
                 const data = await this.dirFile.getChunkData(unmatchedChunks[i]);
                 if (!data) continue;
-                const decompiled = this.lingoDecompiler.decompile(data, this.metadataManager.nameTable, unmatchedScripts[i].scriptType || 0, unmatchedScripts[i].id, { lasm: this.options.lasm });
+                
+                const scriptChunkIndex = this.dirFile.chunks.indexOf(unmatchedChunks[i]);
+                const resolvedNameTable = this.metadataManager.getNameTableForScript(unmatchedChunks[i].id);
+
+                const decompiled = this.lingoDecompiler.decompile(data, resolvedNameTable, unmatchedScripts[i].scriptType || 0, unmatchedScripts[i].id, { lasm: this.options.lasm });
                 const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
                 if (source) {
                     let finalName = unmatchedScripts[i].name;
