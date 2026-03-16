@@ -46,6 +46,10 @@ class LnamParser {
                 }
             }
 
+            if (process.env.VERBOSE) {
+                this.log('DEBUG', `Parsed LNAM with ${nameCount} names. First 300: ${JSON.stringify(names.slice(0, 300))}`);
+            }
+
             return names;
         } catch (e) {
             this.log('ERROR', `Lnam parsing failed: ${e.message}`);

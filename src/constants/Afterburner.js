@@ -30,6 +30,11 @@ module.exports = {
     'STG ': 'Grid', // Grid (Shockwave)
     'CDGF': 'FGDC', // Reversed FGDC (Little Endian)
     'MDGF': 'FGDM', // Reversed FGDM (Little Endian)
+    'revF': 'Fver', // Reversed Fver
+    'pamF': 'Fmap', // Reversed Fmap
+    'rdcF': 'Fcdr', // Reversed Fcdr
+    'pmbA': 'Abmp', // Reversed ABMP
+    'IEGF': 'FGEI', // Reversed FGEI
     'abmc': 'MCsL', // Afterburner MCsL
     'cas*': 'CASt', // Lowercase Protected CASt
     'clut': 'CLUT',

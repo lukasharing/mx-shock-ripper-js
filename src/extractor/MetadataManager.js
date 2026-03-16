@@ -13,7 +13,8 @@ class MetadataManager {
         this.extractor = extractor;
         this.keyTable = {};
         this.resToMember = {};
-        this.nameTable = {};
+        this.nameTables = []; // Array of { index: number, names: string[] }
+        this.scriptToLnam = {};
         this.lctxMap = {};
         this.castList = []; // Implicit Slot Order from Key Table
     }
@@ -33,10 +34,11 @@ class MetadataManager {
                 hash.update(`${tag}=${map[tag]},`);
             }
         }
-        // Also hash the name table if available
-        if (this.nameTable && Object.keys(this.nameTable).length > 0) {
-            const names = Object.values(this.nameTable).join('|');
-            hash.update(names);
+        // Also hash name tables if available
+        if (this.nameTables && this.nameTables.length > 0) {
+            for (const nt of this.nameTables) {
+                hash.update(nt.names.join('|'));
+            }
         }
         return hash.digest('hex');
     }
@@ -117,10 +119,22 @@ class MetadataManager {
             this.castList[i + 1] = castID;
         }
 
-        const lctxChunks = this.extractor.dirFile.getChunksByType(Magic.LCTX_UPPER)
+        const allLctx = this.extractor.dirFile.getChunksByType(Magic.LCTX_UPPER)
             .concat(this.extractor.dirFile.getChunksByType(Magic.Lctx))
             .concat(this.extractor.dirFile.getChunksByType(Magic.lctx_lower))
             .concat(this.extractor.dirFile.getChunksByType(Magic.XTCL));
+        
+        // Deduplicate chunks by ID
+        const lctxChunks = [];
+        const seenIds = new Set();
+        for (const c of allLctx) {
+            if (!seenIds.has(c.id)) {
+                seenIds.add(c.id);
+                lctxChunks.push(c);
+            }
+        }
+
+        // TODO: investigate if you got any Director 11+ files with different LctX entry sizes
         for (const chunk of lctxChunks) {
             const data = await this.extractor.dirFile.getChunkData(chunk);
             if (!data) {
@@ -136,7 +150,7 @@ class MetadataManager {
                 const ds = new DataStream(data, this.extractor.dirFile.ds.endianness);
                 ds.skip(8);
                 let entryCount = ds.readUint32();
-                ds.readUint32(); // unknown 1
+                let entryCount2 = ds.readUint32();
                 let entriesOffset = ds.readUint16();
                 let entrySize = ds.readUint16();
 
@@ -146,10 +160,18 @@ class MetadataManager {
                     ds.endianness = ds.endianness === 'big' ? 'little' : 'big';
                     ds.seek(8);
                     entryCount = ds.readUint32();
-                    ds.readUint32();
+                    entryCount2 = ds.readUint32();
                     entriesOffset = ds.readUint16();
                     entrySize = ds.readUint16();
                 }
+
+                // D11/D12 LctX contains lnamSectionID at offset 32
+                let lnamSectionId = -1;
+                if (data.length >= 36) {
+                    ds.seek(32);
+                    lnamSectionId = ds.readInt32();
+                }
+                // Director 11+ LctX processing
 
                 if (entriesOffset < data.length) {
                     ds.seek(entriesOffset);
@@ -164,8 +186,10 @@ class MetadataManager {
                         ds.seek(entryStart + entrySize);
 
                         if (sectionId > -1) {
-
                             this.lctxMap[i] = sectionId;
+                            if (lnamSectionId > -1) {
+                                this.scriptToLnam[sectionId] = lnamSectionId;
+                            }
                         }
                     }
 
@@ -233,11 +257,61 @@ class MetadataManager {
 
     async parseNameTable() {
         const lnamChunks = this.extractor.dirFile.getChunksByType(Magic.LNAM).concat(this.extractor.dirFile.getChunksByType(AfterburnerTags.manL));
-        const lnam = lnamChunks[0];
-        if (lnam) {
+        
+        this.nameTables = [];
+        for (const lnam of lnamChunks) {
             const data = await this.extractor.dirFile.getChunkData(lnam);
-            if (data) this.nameTable = this.extractor.lnamParser.parse(data, 'big');
+            if (data) {
+                const names = this.extractor.lnamParser.parse(data, 'big');
+                const chunkIndex = this.extractor.dirFile.chunks.indexOf(lnam);
+                this.nameTables.push({ index: chunkIndex, names, id: lnam.id });
+            }
         }
+
+        // Sort by physical index to ensure "nearest preceding" logic works
+        this.nameTables.sort((a, b) => a.index - b.index);
+
+        // Fallback for generic nameTable property if anyone still uses it
+        this.nameTable = this.nameTables.length > 0 ? this.nameTables[0].names : [];
+    }
+
+    /**
+     * Resolves the nearest preceding name table for a script at a given chunk index.
+     * @param {number} scriptChunkIndex - The index of the script chunk in dirFile.chunks
+     * @returns {string[]} - The symbol array from the closest preceding LNAM chunk.
+     */
+    /**
+     * Resolves the correct name table for a script based on LctX mapping.
+     */
+    getNameTableForScript(scriptLogicalId) {
+        const lnamId = this.scriptToLnam[scriptLogicalId];
+        if (lnamId !== undefined) {
+            const table = this.nameTables.find(nt => nt.id === lnamId);
+            if (table) {
+                return table.names;
+            }
+        }
+
+        // Fallback: nearest preceding LNAM (Original heuristic)
+        if (!this.nameTables || this.nameTables.length === 0) return [];
+        
+        // Find chunk index for scriptLogicalId to support preceding logic
+        const scriptChunk = this.extractor.dirFile.chunks.find(c => (this.invFmap && this.invFmap[c.id] === scriptLogicalId) || c.id === scriptLogicalId);
+        const scriptChunkIndex = scriptChunk ? this.extractor.dirFile.chunks.indexOf(scriptChunk) : -1;
+
+        let bestNT = this.nameTables[0].names;
+        let bestIndex = this.nameTables[0].index;
+
+        for (const nt of this.nameTables) {
+            if (scriptChunkIndex !== -1 && nt.index < scriptChunkIndex) {
+                bestNT = nt.names;
+                bestIndex = nt.index;
+            } else if (scriptChunkIndex !== -1) {
+                break;
+            }
+        }
+        // TODO: investigate if you got any better way to resolve name table fallback
+        return bestNT;
     }
 
     /**
@@ -328,6 +402,7 @@ class MetadataManager {
         const memberIdFromRes = this.resToMember[logicalId] || logicalId;
 
         const member = CastMember.fromChunk(memberIdFromRes, data, this.extractor.dirFile.ds.endianness);
+        member._chunkIndex = this.extractor.dirFile.chunks.indexOf(chunk);
 
 
 

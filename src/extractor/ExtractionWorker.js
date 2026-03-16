@@ -212,8 +212,7 @@ parentPort.on('message', async (task) => {
             }
         }
 
-        if (knownChecksum) {
-        }
+        // TODO: investigate if you got any better ways to optimize incremental extraction
 
         if (knownChecksum && contentHash === knownChecksum && !workerOptions.force) {
             parentPort.postMessage({ type: 'SKIP', id: memberId });
@@ -253,6 +252,7 @@ parentPort.on('message', async (task) => {
                 lscrId = lctxMap[memberId];
             }
 
+            // TODO: investigate if you got any Director versions where LctX index differs from Logical ID
 
             let scriptData = data;
             if (lscrId && lscrId !== sectionId) {
@@ -265,7 +265,8 @@ parentPort.on('message', async (task) => {
             if (scriptData) scriptData = Buffer.from(scriptData);
 
 
-            const decompiled = lingoDecompiler.decompile(scriptData, nameTable, member.scriptType || 0, memberId, workerOptions);
+            const resolvedNameTable = task.nameTable || nameTable;
+            const decompiled = lingoDecompiler.decompile(scriptData, resolvedNameTable, member.scriptType || 0, memberId, workerOptions);
             const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
             if (source !== null && source !== undefined) {
                 let finalName = member.name || `member_${memberId}`;

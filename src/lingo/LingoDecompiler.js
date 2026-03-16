@@ -46,7 +46,7 @@ class LingoDecompiler {
             const endianness = options.endianness || 'big';
             const stream = new DataStream(lscrData, endianness);
             const { hLen, sType, map } = this._getSchema(lscrData, externalScriptType);
-            const cal = this._getCalibration(lscrData, nameTable, map, hLen, sType);
+            const cal = this._getCalibration(lscrData, nameTable, map, hLen, sType, memberId);
 
             /**
              * Resolves a bytecode ID to a name based on the calibrated shift.
@@ -239,7 +239,7 @@ class LingoDecompiler {
     /**
      * Probes symbols to calculate relative Name Table offsets.
      */
-    _getCalibration(data, names, map, hLen, sType) {
+    _getCalibration(data, names, map, hLen, sType, memberId) {
         let hShift = 0, gShift = 0, mShift = 0;
         const info = map.get('HAND');
 
@@ -260,9 +260,14 @@ class LingoDecompiler {
 
             if (firstId === nIdx || firstId === cIdx) {
                 hShift = 0;
-            } else if ([LingoConfig.SCRIPT_TYPE.CAST, LingoConfig.SCRIPT_TYPE.LEGACY_BEHAVIOR, LingoConfig.SCRIPT_TYPE.LEGACY_CAST].includes(sType)) {
-                if (nIdx !== -1) hShift = (firstId - nIdx + names.length) % names.length;
-                else if (cIdx !== -1) hShift = (firstId - cIdx + names.length) % names.length;
+            } else if ([LingoConfig.SCRIPT_TYPE.CAST, LingoConfig.SCRIPT_TYPE.LEGACY_BEHAVIOR, LingoConfig.SCRIPT_TYPE.LEGACY_CAST, LingoConfig.SCRIPT_TYPE.PARENT, LingoConfig.SCRIPT_TYPE.LEGACY_PARENT].includes(sType)) {
+                if (nIdx !== -1) {
+                    hShift = (firstId - nIdx + names.length) % names.length;
+                    this.log('DEBUG', `[ID:${memberId}] Calibrated hShift=${hShift} using 'new' (firstId=${firstId}, nIdx=${nIdx})`);
+                } else if (cIdx !== -1) {
+                    hShift = (firstId - cIdx + names.length) % names.length;
+                    this.log('DEBUG', `[ID:${memberId}] Calibrated hShift=${hShift} using 'construct' (firstId=${firstId}, cIdx=${cIdx})`);
+                }
             } else {
                 hShift = 0;
             }
