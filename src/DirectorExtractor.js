@@ -316,9 +316,6 @@ class DirectorExtractor extends BaseExtractor {
             const sendTask = async (worker, member) => {
                 const outPathPrefix = path.join(this.outputDir, (member.name || `member_${member.id}`).replace(/[/\\?%*:|"<>]/g, '_'));
 
-                if (member.typeId === MemberType.Script) {
-                    // TODO: investigate if you got any better ways to resolve anonymous script names
-                }
 
                 let scriptChunkIndex = member._chunkIndex;
                 if (member.typeId === MemberType.Script && !scriptChunkIndex) {

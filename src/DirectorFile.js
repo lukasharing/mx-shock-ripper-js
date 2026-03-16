@@ -97,7 +97,6 @@ class DirectorFile {
             this.chunkIndex[type].push(c);
             types.add(type);
         }
-        this.log('DEBUG', `Indexed ${this.chunks.length} chunks. Unique types: ${Array.from(types).join(', ')}`);
     }
 
     getChunksByType(type) {
@@ -126,7 +125,6 @@ class DirectorFile {
         }
 
         if (!mmapOff) {
-            // TODO: investigate if you got any files where MMAP offset is zero but chunks exist
             if (this.chunks.length > 0 || this.isAfterburned) return;
             throw new Error(`Failed to locate Memory Map (mmap) in ${this.format} file.`);
         }
@@ -179,8 +177,6 @@ class DirectorFile {
         try {
             this.ds.seek(12);
             while (this.ds.position + 8 < this.ds.length) {
-                const rawTag = this.ds.peekFourCC();
-                const tag = DirectorFile.unprotect(rawTag);
                 // Director 8.5+ Afterburner stream parsing
                 
                 if (tag === Magic.FVER) await this._parseFver();
@@ -356,7 +352,6 @@ class DirectorFile {
                 break; 
             }
         }
-        // TODO: investigate if you got any ILS streams with custom XOR encryption
     }
 
     async getChunkData(chunk) {

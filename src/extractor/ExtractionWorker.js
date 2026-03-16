@@ -212,7 +212,6 @@ parentPort.on('message', async (task) => {
             }
         }
 
-        // TODO: investigate if you got any better ways to optimize incremental extraction
 
         if (knownChecksum && contentHash === knownChecksum && !workerOptions.force) {
             parentPort.postMessage({ type: 'SKIP', id: memberId });
@@ -252,7 +251,6 @@ parentPort.on('message', async (task) => {
                 lscrId = lctxMap[memberId];
             }
 
-            // TODO: investigate if you got any Director versions where LctX index differs from Logical ID
 
             let scriptData = data;
             if (lscrId && lscrId !== sectionId) {

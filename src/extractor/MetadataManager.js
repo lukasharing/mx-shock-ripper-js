@@ -134,7 +134,6 @@ class MetadataManager {
             }
         }
 
-        // TODO: investigate if you got any Director 11+ files with different LctX entry sizes
         for (const chunk of lctxChunks) {
             const data = await this.extractor.dirFile.getChunkData(chunk);
             if (!data) {
@@ -171,7 +170,6 @@ class MetadataManager {
                     ds.seek(32);
                     lnamSectionId = ds.readInt32();
                 }
-                // Director 11+ LctX processing
 
                 if (entriesOffset < data.length) {
                     ds.seek(entriesOffset);
@@ -310,7 +308,6 @@ class MetadataManager {
                 break;
             }
         }
-        // TODO: investigate if you got any better way to resolve name table fallback
         return bestNT;
     }
 
