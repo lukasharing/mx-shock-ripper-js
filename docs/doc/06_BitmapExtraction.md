@@ -28,3 +28,4 @@ The `BitmapExtractor` follows a deterministic approach to identify image dimensi
 ## Special Cases
 
 - **Planar Reconstruction**: Handles both interleaved (row-by-row) and stacked (plane-by-plane) pixel distributions for high-depth assets.
+- **Registration Point Normalization**: Director stores registration points as absolute coordinates in an internal canvas space (often 1024x1024 or larger). `mx-shock-ripper-js` automatically normalizes these values by subtracting the `initialRect` offsets, providing relative coordinates required for modern engines.

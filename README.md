@@ -1,5 +1,5 @@
 # mx-shock-ripper-js
-![Version](https://img.shields.io/badge/version-1.4.2-blue)
+![Version](https://img.shields.io/badge/version-1.5.0-blue)
 ![Build](https://img.shields.io/badge/build-stable-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -38,7 +38,8 @@ The reconstruction of Lingo source code follows a rigorous four-phase process:
 - [x] Multi-threaded (recursive) project extraction for `.dcr` and `.cct`.
 - [x] Robust Bitmap extraction with palette resolution and alpha reconstruction.
 - [x] Advanced Lingo decompilation foundation with AST support.
-- [x] Standardized CLI output and logging (Production 1.4.1 grade).
+- [x] Registration Point Normalization for complex furniture assets (v1.5.0).
+- [x] Standardized CLI output and logging (Production 1.5.0 grade).
 - [x] Comprehensive technical documentation and architecture diagrams.
 
 ### Pending / Known Issues
@@ -58,7 +59,7 @@ npm install mx-shock-ripper-js
 The library includes a universal CLI (`mx-rip`) for rapid extraction.
 
 #### Command Help
-mx-shock-ripper-js - Production Grade Director Asset Ripper v1.4.2
+mx-shock-ripper-js - Production Grade Director Asset Ripper v1.5.0
 
 Usage:
   mx-rip <input_file> [output_dir] [options]

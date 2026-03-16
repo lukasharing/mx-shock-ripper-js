@@ -158,7 +158,8 @@ class BitmapExtractor extends BaseExtractor {
     async _doExtract(data, width, height, depth, rowBytes, member, customPalette, alphaBuf, outputPath) {
         if (!data || data.length === 0) return null;
 
-        const palette = customPalette || this.internalPalette || await Palette.resolveMemberPalette(member, this.extractor) ||
+        const isColored = !!(this.extractor.options && this.extractor.options.colored);
+        const palette = customPalette || this.internalPalette || (isColored ? await Palette.resolveMemberPalette(member, this.extractor) : null) ||
             (depth === 1 ? [[255, 255, 255], [0, 0, 0]] : null);
 
         let orders = [Bitmap.ChannelOrder.DEFAULT];

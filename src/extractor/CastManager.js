@@ -70,7 +70,7 @@ class CastManager {
                 // Palette
                 else if (map[Magic.CLUT] || map[Magic.Palt] || map[Magic.palt_lower] || map[Magic.PALT_UPPER]) member.typeId = MemberType.Palette;
                 // Text
-                else if (map[Magic.STXT] || map[Magic.text_lower] || map[Magic.TXTS]) member.typeId = MemberType.Text;
+                else if (map[Magic.STXT] || map[Magic.TEXT] || map[Magic.text_lower] || map[Magic.TXTS]) member.typeId = MemberType.Text;
                 // Script
                 else if (map[Magic.Lscl] || map[Magic.LSCR] || map[Magic.LSCR_UPPER]) member.typeId = MemberType.Script;
                 // Sound
@@ -126,8 +126,8 @@ class CastManager {
         // 1. Metadata Reconstruction & Orphan Detection
         const contentTags = [
             Magic.LSCR, Magic.Lscl, Magic.BITD, Magic.ABMP, Magic.SND, Magic.DIB, Magic.PIXL,
-            Magic.STXT, Magic.TXTS, Magic.CLUT, Magic.PALT_UPPER, Magic.medi, Magic.snd,
-            Magic.ABMP, Magic.bitd_lower, Magic.text_lower, Magic.PMBA, Magic.ediM, 'SND*',
+            Magic.STXT, Magic.TXTS, Magic.TEXT, Magic.text_lower, Magic.stxt_lower, Magic.CLUT, Magic.PALT_UPPER, Magic.medi, Magic.snd,
+            Magic.ABMP, Magic.bitd_lower, Magic.PMBA, Magic.ediM, 'SND*',
             Magic.manL, Magic.rcsL, Magic.MooV, Magic.VdM, Magic.Flas, Magic.MCrs, Magic.PICT
         ];
 
@@ -145,8 +145,15 @@ class CastManager {
                 }
             } else if (contentTags.includes(normalized) || contentTags.includes(trimmed) || normalized.startsWith('Fx')) {
                 orphans.push({ chunk, tag: normalized });
+            } else {
+                // Log unhandled tags that might be relevant
+                if (normalized.length === 4 && !normalized.includes('\0')) {
+                    // this.extractor.log('DEBUG', `[CastManager] Potential content tag ignored: ${normalized} (chunk ${chunk.id})`);
+                }
             }
         }));
+
+        this.extractor.log('INFO', `[CastManager] Found ${orphans.length} potential orphan chunks.`);
 
         // Association Pass: Try to link orphans to members
         // Afterburner files often have detached content chunks (BITD/medi) that are 
@@ -156,6 +163,10 @@ class CastManager {
 
             const logicalId = (metadata.invFmap && metadata.invFmap[chunk.id] !== undefined) ? metadata.invFmap[chunk.id] : chunk.id;
             const memberId = metadata.resToMember[logicalId] || logicalId;
+
+            if (tag === Magic.STXT || tag === Magic.TEXT || tag === Magic.stxt_lower || tag === Magic.text_lower || memberId === 105) {
+                this.extractor.log('INFO', `[CastManager] Orphan Chunk ${chunk.id} (logical ${logicalId}, tag ${tag}) -> Member ${memberId}`);
+            }
 
             // Scripts (LSCR) are mapped via LCTX, not KEY* table or 1:1 ID matching.
             if (tag === Magic.LSCR || tag === Magic.Lscl) {
@@ -211,13 +222,16 @@ class CastManager {
                 if (tag === Magic.ABMP || tag === Magic.PMBA || tag === Magic.DIB || tag === Magic.bitd_lower) finalTag = Magic.BITD;
                 if (tag === Magic.medi || tag === Magic.ediM) finalTag = Magic.medi;
                 if (tag === Magic.snd || tag === 'SND*' || tag === Magic.snd) finalTag = Magic.SND;
-                if (tag === Magic.text_lower || tag === Magic.STXT || tag === Magic.stxt_lower) finalTag = Magic.STXT;
+                if (tag === Magic.text_lower || tag === Magic.STXT || tag === Magic.stxt_lower || tag === Magic.TEXT) finalTag = Magic.STXT;
                 if (tag === Magic.manL) finalTag = Magic.LNAM;
 
                 if (!metadata.keyTable[member.id]) metadata.keyTable[member.id] = {};
                 if (!metadata.keyTable[member.id][finalTag]) {
                     metadata.keyTable[member.id][finalTag] = chunk.id;
-
+                }
+            } else {
+                if (tag === Magic.STXT || tag === Magic.TEXT || tag === Magic.stxt_lower || tag === Magic.text_lower) {
+                    this.extractor.log('WARNING', `[CastManager] Failed to find member for orphaned text chunk ${chunk.id} (Member ${memberId})`);
                 }
             }
         }

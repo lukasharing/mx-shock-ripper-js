@@ -680,6 +680,12 @@ class Palette {
             return [[255, 255, 255], [0, 0, 0]];
         }
 
+        // Check if colorization is disabled
+        if (extractor?.options?.colored === false && member.bitDepth <= 8) {
+            member.palette = { name: "Grayscale (Linear)", castlib: 'system', forced: true };
+            return null; // Triggers greyscale fallback in BitmapExtractor
+        }
+
 
         // --- PHASE 2: Canonical Resolution ---
 
