@@ -45,6 +45,7 @@ class MetadataManager {
 
     async parseKeyTable() {
         const keyChunks = this.extractor.dirFile.getChunksByType(Magic.KEY).concat(this.extractor.dirFile.getChunksByType('KEY '));
+        this.extractor.log('DEBUG', `parseKeyTable: found ${keyChunks.length} KEY chunks. Searching for Magic.KEY="${Magic.KEY}"`);
         const keyChunk = keyChunks[0];
         if (!keyChunk) return;
 
@@ -134,7 +135,7 @@ class MetadataManager {
             }
         }
 
-        // TODO: investigate if you got any Director 11+ files with different LctX entry sizes
+        this.extractor.log('DEBUG', `Found ${lctxChunks.length} unique LCTX chunks in file.`);
         for (const chunk of lctxChunks) {
             const data = await this.extractor.dirFile.getChunkData(chunk);
             if (!data) {
@@ -171,7 +172,7 @@ class MetadataManager {
                     ds.seek(32);
                     lnamSectionId = ds.readInt32();
                 }
-                // Director 11+ LctX processing
+                this.extractor.log("DEBUG", `LCTX chunk ${chunk.id}: entryCount=${entryCount}, lnamSectionId=${lnamSectionId}`);
 
                 if (entriesOffset < data.length) {
                     ds.seek(entriesOffset);
@@ -189,6 +190,7 @@ class MetadataManager {
                             this.lctxMap[i] = sectionId;
                             if (lnamSectionId > -1) {
                                 this.scriptToLnam[sectionId] = lnamSectionId;
+                                this.extractor.log('DEBUG', `[LCTX ${chunk.id}] Mapped script ${sectionId} to LNAM ${lnamSectionId}`);
                             }
                         }
                     }
@@ -265,6 +267,7 @@ class MetadataManager {
                 const names = this.extractor.lnamParser.parse(data, 'big');
                 const chunkIndex = this.extractor.dirFile.chunks.indexOf(lnam);
                 this.nameTables.push({ index: chunkIndex, names, id: lnam.id });
+                this.extractor.log('DEBUG', `Found LNAM chunk at index ${chunkIndex}, id ${lnam.id}, names count: ${names.length}`);
             }
         }
 
@@ -288,6 +291,7 @@ class MetadataManager {
         if (lnamId !== undefined) {
             const table = this.nameTables.find(nt => nt.id === lnamId);
             if (table) {
+                this.extractor.log('DEBUG', `Resolved name table ID ${lnamId} from LctX mapping for script ${scriptLogicalId}`);
                 return table.names;
             }
         }
@@ -310,7 +314,7 @@ class MetadataManager {
                 break;
             }
         }
-        // TODO: investigate if you got any better way to resolve name table fallback
+        this.extractor.log('DEBUG', `Resolved name table from LNAM at index ${bestIndex} (fallback) for script ${scriptLogicalId}`);
         return bestNT;
     }
 

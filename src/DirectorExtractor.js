@@ -109,6 +109,7 @@ class DirectorExtractor extends BaseExtractor {
 
         const stats = fs.statSync(this.inputPath);
         const fd = fs.openSync(this.inputPath, 'r');
+        this.log('DEBUG', `Initializing DirectorFile: size=${stats.size}`);
         this.dirFile = new DirectorFile(fd, (lvl, msg) => this.log(lvl, msg), stats.size);
         try {
             await this.dirFile.parse();
@@ -121,6 +122,7 @@ class DirectorExtractor extends BaseExtractor {
         if (!fs.existsSync(this.outputDir)) fs.mkdirSync(this.outputDir, { recursive: true });
 
         // Phase 1: Structural Discovery & Key Metadata
+        this.log('DEBUG', 'Starting parseKeyTable phase...');
         await this.metadataManager.parseKeyTable();
         await this.metadataManager.parseMCsL();
         await this.metadataManager.parseNameTable();
@@ -317,7 +319,7 @@ class DirectorExtractor extends BaseExtractor {
                 const outPathPrefix = path.join(this.outputDir, (member.name || `member_${member.id}`).replace(/[/\\?%*:|"<>]/g, '_'));
 
                 if (member.typeId === MemberType.Script) {
-                    // TODO: investigate if you got any better ways to resolve anonymous script names
+                    this.log('DEBUG', `Sending script member ${member.id} (${member.name}): sType=${member.scriptType}, chunkIndex=${member._chunkIndex}`);
                 }
 
                 let scriptChunkIndex = member._chunkIndex;

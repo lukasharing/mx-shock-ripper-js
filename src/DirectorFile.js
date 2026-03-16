@@ -126,7 +126,6 @@ class DirectorFile {
         }
 
         if (!mmapOff) {
-            // TODO: investigate if you got any files where MMAP offset is zero but chunks exist
             if (this.chunks.length > 0 || this.isAfterburned) return;
             throw new Error(`Failed to locate Memory Map (mmap) in ${this.format} file.`);
         }
@@ -179,9 +178,10 @@ class DirectorFile {
         try {
             this.ds.seek(12);
             while (this.ds.position + 8 < this.ds.length) {
+                const pos = this.ds.position;
                 const rawTag = this.ds.peekFourCC();
                 const tag = DirectorFile.unprotect(rawTag);
-                // Director 8.5+ Afterburner stream parsing
+                // this.log('DEBUG', `Pos ${pos}: tag="${rawTag}" -> "${tag}"`);
                 
                 if (tag === Magic.FVER) await this._parseFver();
                 else if (tag === Magic.FMAP) await this._parseFmap();
@@ -194,7 +194,7 @@ class DirectorFile {
                 } else if (tag.length === 4 && /^[a-zA-Z0-9 *]{4}$/.test(tag)) {
                     this.ds.readFourCC();
                     const skipLen = this.ds.readUint32();
-                    // skipping unknown chunks
+                    this.log('DEBUG', `Skipping unknown 8-byte chunk: len=${skipLen}`);
                     this.ds.skip(skipLen);
                 } else {
                     this.ds.skip(1);
@@ -257,6 +257,7 @@ class DirectorFile {
         const ds = new DataStream(raw, 'big');
         if (ds.length < 2) return;
         const count = ds.readUint16();
+        this.log('DEBUG', `Fcdr: count=${count} uncompressedLen=${ds.length}`);
         for (let i = 0; i < count; i++) {
             if (ds.position + 16 > ds.length) break;
             ds.skip(16); // Skip Fcdr entries as they are often garbage in Afterburner
@@ -287,6 +288,7 @@ class DirectorFile {
         ds.readVarInt(); // v1
         ds.readVarInt(); // v2
         const resCount = ds.readVarInt();
+        this.log('DEBUG', `ABMP: resCount=${resCount} uncompLen=${decomp.length}`);
 
         for (let i = 0; i < resCount; i++) {
             if (ds.position >= ds.length) break;
@@ -298,6 +300,11 @@ class DirectorFile {
             const rawTag = ds.readFourCC();
             const tag = DirectorFile.unprotect(rawTag);
 
+            /*
+            if (i < 10) {
+                this.log('DEBUG', `ABMP[${i}]: resId=${resId} tag="${rawTag}"->"${tag}" off=${offset} comp=${compSize} uncomp=${uncompSize}`);
+            }
+            */
 
             this.chunks.push({ 
                 type: tag, 
@@ -320,6 +327,7 @@ class DirectorFile {
         if (!ilsInfo) ilsInfo = this.getChunkById(ilsLogicalId) || this.getChunkById(2);
 
         if (ilsInfo && ilsInfo.len > 0 && ilsInfo.len < this.ds.length) {
+            this.log('DEBUG', `FGEI: Using ILS chunk info: id=${ilsInfo.id} tag="${ilsInfo.type}" len=${ilsInfo.len}`);
             await this.loadInlineStream(ilsInfo);
         } else {
             this.log('WARNING', `FGEI: Could not find valid ILS chunk. ilsLogicalId=${ilsLogicalId}`);
@@ -334,6 +342,7 @@ class DirectorFile {
         }
         
         const ds = new DataStream(decomp, this.ds.endianness);
+        this.log('DEBUG', `loadInlineStream: Decompressed ILS length=${decomp.length}`);
         
         let loadedCount = 0;
         while (ds.position + 1 < ds.length) {
@@ -356,7 +365,7 @@ class DirectorFile {
                 break; 
             }
         }
-        // TODO: investigate if you got any ILS streams with custom XOR encryption
+        this.log('DEBUG', `loadInlineStream: Loaded ${loadedCount} chunks into cache.`);
     }
 
     async getChunkData(chunk) {
