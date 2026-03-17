@@ -272,32 +272,7 @@ class LingoDecompiler {
                 hShift = 0;
             }
 
-            // Probe 2: Movie/Global Shift using 'traceScript'
-            const tIdx = names.indexOf("traceScript");
-            if (tIdx !== -1) {
-                ds.seek(info.offset); ds.skip(4);
-                const co = ds.readUint32();
-                if (co > 0 && co < data.length) {
-                    let pos = co, max = Math.min(co + 1000, data.length);
-                    while (pos < max - 2) {
-                        const op = data[pos];
-                        const idx = (op >= LingoConfig.OP_SHIFT_THRESHOLD) ? op % LingoConfig.OP_SHIFT_THRESHOLD : op;
-                        let len = (op >= 0xc0) ? 5 : (op >= 0x80) ? 3 : (op >= LingoConfig.OP_SHIFT_THRESHOLD) ? 2 : 1;
-                        if (len > 1 && (pos + 1 + 2 <= data.length)) {
-                            const id = data.readUInt16BE(pos + 1);
-                            // Detect GETTOPLEVELPROP (0x32) or MOVIEPROP/PUSHVAR (0x1f/0x20)
-                            if ([0x1f, 0x20].includes(idx)) {
-                                if (mShift === 0) mShift = (id - tIdx + names.length) % names.length;
-                            } else if (idx === 0x32) {
-                                if (gShift === 0) gShift = (id - tIdx + names.length) % names.length;
-                            }
-                        }
-                        pos += len;
-                    }
-                }
-            }
-            if (mShift === 0) mShift = hShift;
-            if (gShift === 0) gShift = hShift;
+            // Probe 2 removed: the assumption that the first getmovieprop is traceScript is fundamentally flawed.
         }
         return { hShift, gShift, mShift };
 
