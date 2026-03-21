@@ -1,3 +1,4 @@
+const path = require('path');
 const zlib = require('zlib');
 const { PNG } = require('pngjs');
 const fs = require('fs');
@@ -23,7 +24,7 @@ class BitmapExtractor extends BaseExtractor {
     }
 
     async extract(bitmapBuf, outputPath, member, customPalette = null, alphaBuf = null) {
-        if (!bitmapBuf || bitmapBuf.length === 0) return null;
+        if (!bitmapBuf || bitmapBuf.length === 0) return { reason: 'empty_asset' };
 
         // 1. Geometry sets
         // Prioritize SPEC dimensions over Cast metadata dimensions for legacy assets
@@ -48,16 +49,6 @@ class BitmapExtractor extends BaseExtractor {
             zpb: null,
             zlibAttempted: false
         };
-
-        if (dimSets.length === 0) {
-            this.log('WARNING', `Member ${member.name} has ${bitmapBuf.length} bytes of data but no dimensions. Extracting as RAW .dat file.`);
-            if (outputPath) {
-                const result = await this.saveFile(bitmapBuf, outputPath, Resources.Labels.Bitmap);
-                if (result) result.format = 'dat';
-                return result;
-            }
-            return bitmapBuf;
-        }
 
         const getMethodData = (name) => {
             if (name === 'Raw') return cache.raw;
@@ -98,6 +89,26 @@ class BitmapExtractor extends BaseExtractor {
         const depths = [32, 16, 8, 4, 1, 2];
         const orderedDepths = [declaredDepth, ...depths.filter(d => d !== declaredDepth)];
         const alignments = [1, 2, 4, 8, 16, 32, 64, 128];
+
+        if (dimSets.length === 0) {
+            const inferred = this._inferIndexedGeometry(getMethodData, declaredDepth);
+            if (inferred) {
+                member.width = inferred.w;
+                member.height = inferred.h;
+                this.log('INFO', `Inferred geometry for ${member.name}: ${inferred.w}x${inferred.h} via ${inferred.method}`);
+                return this._doExtract(inferred.data, inferred.w, inferred.h, inferred.depth, inferred.rowBytes, member, customPalette, alphaBuf, outputPath);
+            }
+
+            this.log('WARNING', `Member ${member.name} has ${bitmapBuf.length} bytes of data but no dimensions. Extracting as RAW .dat file.`);
+            if (outputPath) {
+                const parsed = path.parse(outputPath);
+                const rawPath = path.join(parsed.dir, `${parsed.name}.dat`);
+                const result = await this.saveFile(bitmapBuf, rawPath, Resources.Labels.Bitmap);
+                if (result) result.format = 'dat';
+                return result;
+            }
+            return bitmapBuf;
+        }
 
 
         // 3. Robust Trial Loop
@@ -146,12 +157,12 @@ class BitmapExtractor extends BaseExtractor {
         // Gracefully handle intentionally empty/dummy sprites
         if (bitmapBuf.length <= 16) {
             this.log('DEBUG', `Skipping ${member.name}: Dummy/Empty sprite detected (Size: ${bitmapBuf.length} bytes)`);
-            return null;
+            return { reason: 'empty_asset' };
         }
 
         // Exhaustive fallback: try rare padding alignments or offset trials if standard ones fail.
         this.log('ERROR', `No matching configuration found for ${member.name}. Tried all prioritized decompression/geometry combinations. (Size: ${bitmapBuf.length})`);
-        return null;
+        return { reason: 'unsupported_content' };
     }
 
 
@@ -177,7 +188,11 @@ class BitmapExtractor extends BaseExtractor {
 
                 if (outputPath) {
                     const result = await this.saveFile(imgData, outputPath, Resources.Labels.Bitmap);
-                    if (result) result.format = Resources.Formats.PNG;
+                    if (result) {
+                        result.format = Resources.Formats.PNG;
+                        result.width = width;
+                        result.height = height;
+                    }
                     return result;
                 }
                 return imgData;
@@ -186,6 +201,91 @@ class BitmapExtractor extends BaseExtractor {
             }
         }
         return null;
+    }
+
+    _inferIndexedGeometry(getMethodData, depth = 8) {
+        if (![1, 2, 4, 8].includes(depth)) return null;
+
+        const candidates = [];
+        for (const method of ['Raw', 'PackBits', 'Zlib', 'Zlib+PackBits']) {
+            const data = getMethodData(method);
+            if (!data || data.length < 64) continue;
+
+            const inferred = this._inferIndexedLayoutFromBuffer(data, depth);
+            if (inferred) {
+                candidates.push({ ...inferred, method, depth, data });
+            }
+        }
+
+        if (candidates.length === 0) return null;
+        candidates.sort((a, b) => a.score - b.score);
+        return candidates[0];
+    }
+
+    _inferIndexedLayoutFromBuffer(data, depth) {
+        const alignments = [1, 2, 4, 8, 16];
+        const maxDimension = 512;
+        let best = null;
+
+        for (let height = 2; height <= Math.min(maxDimension, data.length); height++) {
+            if ((data.length % height) !== 0) continue;
+
+            const rowBytes = data.length / height;
+            if (rowBytes <= 0 || rowBytes > maxDimension) continue;
+
+            const maxWidth = Math.floor((rowBytes * 8) / depth);
+            if (maxWidth <= 0) continue;
+
+            const minWidth = Math.max(1, maxWidth - 31);
+            for (let width = maxWidth; width >= minWidth; width--) {
+                const baseRowBytes = Math.ceil((width * depth) / 8);
+                if (baseRowBytes > rowBytes) continue;
+
+                let matchedAlign = 0;
+                for (const align of alignments) {
+                    if (Math.ceil(baseRowBytes / align) * align === rowBytes) {
+                        matchedAlign = align;
+                        break;
+                    }
+                }
+                if (!matchedAlign) continue;
+
+                const ratio = Math.max(width, height) / Math.max(1, Math.min(width, height));
+                if (ratio > 8) continue;
+
+                const pad = rowBytes - baseRowBytes;
+                const score = this._scoreIndexedLayout(data, width, height, rowBytes) + pad;
+
+                if (!best || score < best.score) {
+                    best = { w: width, h: height, rowBytes, pad, align: matchedAlign, score };
+                }
+            }
+        }
+
+        return best;
+    }
+
+    _scoreIndexedLayout(data, width, height, rowBytes) {
+        let diff = 0;
+        let samples = 0;
+
+        for (let y = 0; y < height; y++) {
+            const rowBase = y * rowBytes;
+
+            for (let x = 0; x + 1 < width; x++) {
+                diff += Math.abs(data[rowBase + x] - data[rowBase + x + 1]);
+                samples++;
+            }
+
+            if (y + 1 >= height) continue;
+            const nextRowBase = rowBase + rowBytes;
+            for (let x = 0; x < width; x++) {
+                diff += Math.abs(data[rowBase + x] - data[nextRowBase + x]);
+                samples++;
+            }
+        }
+
+        return diff / Math.max(1, samples);
     }
 
     _tryZlib(buf) {

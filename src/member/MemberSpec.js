@@ -3,6 +3,8 @@
  * MemberSpec.js - Type-specific binary metadata parsers
  */
 
+const { Palette } = require('../utils/Palette');
+
 class BitmapSpec {
     /**
      * Payload: [Flags1(4)][InitialRect(8)][RegPointLegacy(4)][RegPoint(4)][PaletteId(2)][Flags2(2)][Depth(2)][AlphaRef(2)]
@@ -16,34 +18,38 @@ class BitmapSpec {
         const pitch = pitchRaw & 0x3FFF;
 
         const initialRect = ds.readRect(); // Offset 2
+        const boundingRect = (len >= 18) ? ds.readRect() : null;
 
         // Safe seek and read (standard length is 24-28 bytes)
-        let regY = 0, regX = 0, updateFlags = 0, bitDepth = 8;
+        let regY = 0, regX = 0, updateFlags = 0, bitDepth = isColor ? 8 : 1;
         if (len >= 22) {
             ds.seek(startPos + 18);
             regY = ds.readInt16(); // Offset 18
             regX = ds.readInt16(); // Offset 20
             if (len >= 24) {
                 updateFlags = ds.readUint8(); // Offset 22
-                bitDepth = ds.readUint8();    // Offset 23
+                bitDepth = ds.readUint8() || bitDepth;    // Offset 23
             }
         }
 
         let clutCastLib = 0;
         let clutId = 0;
 
-        if (len >= 28 && (isColor || ds.position + 4 <= startPos + len)) {
-            clutCastLib = ds.readInt16(); // Offset 24
-            clutId = ds.readInt16();      // Offset 26
+        if (isColor && len >= 26) {
+            ds.seek(startPos + 24);
+            if (len >= 28) {
+                clutCastLib = ds.readInt16(); // Offset 24
+                clutId = ds.readInt16();      // Offset 26
+            } else {
+                // Director 4 color bitmap data stores only the palette ID here.
+                clutId = ds.readInt16();
+            }
 
             // Normalize clutCastLib: -1 often means "Current Cast" (Director behavior)
             if (clutCastLib === -1) clutCastLib = 0;
 
-            // Normalize built-in palette IDs (-1 offset)
-            // 0 -> -1 (Mac), -1 -> -2 (Rainbow), etc.
-            // Only normalize if it's a system palette reference (clutCastLib === 0)
             if (clutId <= 0 && clutCastLib === 0) {
-                clutId -= 1;
+                clutId = Palette.normalizePaletteId(clutId);
             }
         }
 
@@ -58,17 +64,20 @@ class BitmapSpec {
         };
 
         const res = {
-            height: height || 1,
-            width: width || 1,
+            height,
+            width,
             regPoint: normalizedRegPoint,
             paletteId: clutId,      // Map clutId to paletteId for compatibility
             clutCastLib,
-            bitDepth: bitDepth || 8,
+            bitDepth,
             _pitch: pitch,
             _isColor: isColor,
             _updateFlags: updateFlags,
             _initialRect: initialRect,
+            _boundingRect: boundingRect,
             _castFlags: pitchRaw,   // Store raw pitch as castFlags for legacy checks
+            _regX: regX,
+            _regY: regY,
             secondaryPaletteId: clutId // Keep secondaryPaletteId for now
         };
         return res;

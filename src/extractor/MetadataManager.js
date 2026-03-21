@@ -100,7 +100,7 @@ class MetadataManager {
             if (entrySize === Offsets.KeyEntryStandard) {
                 sectionID = ds.readInt32();
                 castID = ds.readInt32();
-                tag = ds.readFourCC();
+                tag = DirectorFile.unprotect(ds.readFourCC());
             } else if (entrySize === Offsets.KeyEntryShort) {
                 sectionID = ds.readInt32();
                 tag = DirectorFile.unprotect(ds.readFourCC());
@@ -430,10 +430,6 @@ class MetadataManager {
         hash.update(CastMember.getTypeName(member.typeId));
         member.checksum = `header:${hash.digest('hex').substring(0, 8)}`;
 
-        const typeName = CastMember.getTypeName(member.typeId);
-        this.extractor.stats.total++;
-        this.extractor.stats.byType[typeName] = (this.extractor.stats.byType[typeName] || 0) + 1;
-
         // Primary lookup: try to find an existing member by the reliable resource-mapped ID first.
         // Fallback to originalSlotId only if valid (> 0), as slots are deterministic identity anchors.
         const targetMember = existingMember ||
@@ -483,13 +479,11 @@ class MetadataManager {
                 if (data.length >= 50) {
                     ds.seek(48);
                     paletteId = ds.readInt16();
-                    if (paletteId <= 0) paletteId -= 1;
                 }
             } else if (version >= 0x4B1) { // kFileVer500+
                 if (data.length >= 58) {
                     ds.seek(56);
                     paletteId = ds.readInt16();
-                    if (paletteId <= 0) paletteId -= 1;
                 }
             }
 

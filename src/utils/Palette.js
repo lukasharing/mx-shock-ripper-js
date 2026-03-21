@@ -696,8 +696,8 @@ class Palette {
         }
 
         // Canonical Movie Default Resolution (Standardized)
-        // If ID is 0/-1, we check if a movie-wide default is set in the DRCF.
-        if ((logicalPaletteId === 0 || logicalPaletteId === -1) && extractor?.metadataManager?.movieConfig?.defaultPaletteId) {
+        // Only an unresolved/implicit palette id should inherit the movie default.
+        if (logicalPaletteId === 0 && extractor?.metadataManager?.movieConfig?.defaultPaletteId) {
             const defId = extractor.metadataManager.movieConfig.defaultPaletteId;
             const defPal = await this.tracePaletteChain(member, extractor, platform, defId);
             if (defPal) {
@@ -750,6 +750,20 @@ class Palette {
                     return pal;
                 }
             }
+        }
+
+        const movieDefault = Array.isArray(extractor?.defaultMoviePalette) ? extractor.defaultMoviePalette : null;
+        if (movieDefault && movieDefault.length > 0) {
+            member.palette = { name: "Movie Palette", castlib: 'internal', fallback: 'movie-default-palette' };
+            return movieDefault;
+        }
+
+        const projectDefault = extractor?.projectContext && typeof extractor.projectContext.getDefaultPalette === 'function'
+            ? extractor.projectContext.getDefaultPalette()
+            : null;
+        if (Array.isArray(projectDefault) && projectDefault.length > 0) {
+            member.palette = { name: "Project Default Palette", castlib: 'project', fallback: 'project-default-palette' };
+            return projectDefault;
         }
 
         // --- PHASE 6: Ultimate Fallback ---

@@ -33,15 +33,20 @@ module.exports = {
     'revF': 'Fver', // Reversed Fver
     'pamF': 'Fmap', // Reversed Fmap
     'rdcF': 'Fcdr', // Reversed Fcdr
+    'FCRD': 'DRCF', // Reversed DRCF
     'pmbA': 'Abmp', // Reversed ABMP
     'IEGF': 'FGEI', // Reversed FGEI
     'abmc': 'MCsL', // Afterburner MCsL
     'cas*': 'CASt', // Lowercase Protected CASt
+    '*SAC': 'CASt', // Reversed CASt
     'clut': 'CLUT',
     'Palt': 'CLUT',
     'palt': 'CLUT',
     'PALT': 'CLUT',
+    'TULC': 'CLUT', // Reversed CLUT
     'bitd': 'BITD',
+    'DTIB': 'BITD', // Reversed BITD
+    'AFLA': 'ALFA', // Reversed ALFA
     'stxt': 'STXT',
     'TXTS': 'STXT'
 };

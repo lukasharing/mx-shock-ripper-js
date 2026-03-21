@@ -29,23 +29,23 @@ const logProxy = (lvl, msg, memberId) => {
     parentPort.postMessage({ type: 'LOG', level: lvl, message: msg, memberId });
 };
 
-// Autonomous Data Accessor (Simplified version of DirectorFile logic for Worker)
-// O(1) Performance Optimization (Fixes v1.4.2 regression)
-// We use a Map for O(1) lookups instead of O(n) find/filter.
-// Critical: We MUST allow later chunks (like ABMP) to overwrite earlier 
-// ones (like MMAP placeholders) to support Afterburned/Hybrid files.
+// Autonomous data accessor mirroring DirectorFile's canonical direct-id lookup.
+// Later chunks (for example ABMP entries) overwrite earlier placeholders for the
+// same resource id, which is the intended behavior for Afterburned files.
 const chunkMap = new Map();
 for (const chunk of chunks) {
     chunkMap.set(chunk.id, chunk);
 }
 
-const getChunkById = (id) => {
-    const physicalId = (fmap && fmap[id] !== undefined) ? fmap[id] : id;
-    return chunkMap.get(physicalId) || null;
+const getChunkById = (id) => chunkMap.get(id) || null;
+const isReadableChunk = (chunk) => !!(chunk && chunk.len > 0 && chunk.off >= 0);
+
+const postSkip = (id, reason) => {
+    parentPort.postMessage({ type: 'SKIP', id, reason });
 };
 
 const getChunkData = async (chunk) => {
-    if (!chunk) return null;
+    if (!isReadableChunk(chunk)) return null;
     try {
         const physicalOffset = chunk.physicalOffset;
         let buf;
@@ -173,7 +173,7 @@ parentPort.on('message', async (task) => {
         const map = keyTable[memberId];
         const isScript = member.typeId === MemberType.Script;
         if (!map && !isScript) {
-            parentPort.postMessage({ type: 'DONE', id: memberId, checksum: null });
+            postSkip(memberId, 'unresolved_reference');
             return;
         }
 
@@ -189,14 +189,16 @@ parentPort.on('message', async (task) => {
         if (sectionId > 0) {
             const chunk = getChunkById(sectionId);
             if (!chunk) {
-                logProxy('WARNING', `Skipping member ${memberId}: Physical chunk ${sectionId} is missing (likely an external linked asset)`);
-                parentPort.postMessage({ type: 'SKIP', id: memberId });
+                postSkip(memberId, 'unresolved_reference');
+                return;
+            }
+            if (!isReadableChunk(chunk)) {
+                postSkip(memberId, 'placeholder_source');
                 return;
             }
             data = await getChunkData(chunk);
             if (!data) {
-                logProxy('WARNING', `Skipping member ${memberId}: Failed to read chunk data`);
-                parentPort.postMessage({ type: 'SKIP', id: memberId });
+                postSkip(memberId, 'unresolved_reference');
                 return;
             }
         }
@@ -214,7 +216,7 @@ parentPort.on('message', async (task) => {
 
 
         if (knownChecksum && contentHash === knownChecksum && !workerOptions.force) {
-            parentPort.postMessage({ type: 'SKIP', id: memberId });
+            postSkip(memberId, 'unchanged');
             return;
         }
 
@@ -225,7 +227,7 @@ parentPort.on('message', async (task) => {
             let alphaData = null;
             if (map[Magic.ALFA]) {
                 const alphaChunk = getChunkById(map[Magic.ALFA]);
-                if (alphaChunk) alphaData = await getChunkData(alphaChunk);
+                if (isReadableChunk(alphaChunk)) alphaData = await getChunkData(alphaChunk);
             }
             result = await bitmapExtractor.extract(data, outPathPrefix + Resources.FileExtensions.PNG, member, palette, alphaData);
         } else if (typeId === MemberType.Sound) {
@@ -254,8 +256,8 @@ parentPort.on('message', async (task) => {
 
             let scriptData = data;
             if (lscrId && lscrId !== sectionId) {
-                const lscrChunk = chunks.find(c => c.id === lscrId);
-                if (lscrChunk) {
+                const lscrChunk = getChunkById(lscrId);
+                if (isReadableChunk(lscrChunk)) {
                     scriptData = await getChunkData(lscrChunk);
                 }
             }
@@ -309,26 +311,43 @@ parentPort.on('message', async (task) => {
                 }
 
                 const checksum = crypto.createHash('sha256').update(source).digest('hex');
-                result = { format: Resources.Formats.LS, file: outPath, checksum, renamed: wasRenamed ? finalName : undefined };
+                result = {
+                    format: Resources.Formats.LS,
+                    file: path.basename(outPath),
+                    path: outPath,
+                    checksum,
+                    renamed: wasRenamed ? finalName : undefined
+                };
             }
         } else if (typeId === MemberType.FilmLoop) {
             result = await movieExtractor.save(data, outPathPrefix + Resources.FileExtensions.JSON, member);
         } else {
             if (data && data.length > 0) {
-                result = await genericExtractor.save(data, outPathPrefix + Resources.FileExtensions.Binary);
+                const genericResult = await genericExtractor.save(data, outPathPrefix + Resources.FileExtensions.Binary);
+                if (genericResult) {
+                    result = {
+                        ...genericResult,
+                        format: Resources.Formats.DAT
+                    };
+                }
             }
         }
+
+        const outcomeReason = result?.format
+            ? undefined
+            : (result?.reason || (data && data.length > 0 ? 'unsupported_content' : 'empty_asset'));
 
         // Final Response to main thread
         parentPort.postMessage({
             type: 'DONE',
             id: memberId,
-            checksum: result?.checksum || contentHash, // Use script checksum if available
+            checksum: contentHash || result?.checksum || null,
             format: result?.format,
             scriptFile: result?.file || result?.path,
             width: result?.width,
             height: result?.height,
-            renamed: result?.renamed
+            renamed: result?.renamed,
+            reason: outcomeReason
         });
     } catch (e) {
         logProxy('ERROR', `Error for ${memberId}: ${e.message}`);

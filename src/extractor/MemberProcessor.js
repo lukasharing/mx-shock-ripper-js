@@ -153,9 +153,11 @@ class MemberProcessor {
                 if (!this.extractor.defaultMoviePalette) {
                     this.extractor.defaultMoviePalette = member.palette;
                 }
-                const outPath = path.join(this.extractor.outputDir, `${member.name}.pal`);
-                const result = await this.extractor.paletteExtractor.save(member.palette, outPath, member);
-                if (result) member.format = result.format;
+                if (this.extractor.options.palette) {
+                    const outPath = path.join(this.extractor.outputDir, `${member.name}.pal`);
+                    const result = await this.extractor.paletteExtractor.save(member.palette, outPath, member);
+                    if (result) member.format = result.format;
+                }
             }
         } catch (e) {
             this.log('ERROR', `Failed to process palette ${member.id}: ${e.message}`);

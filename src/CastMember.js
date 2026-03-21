@@ -42,7 +42,9 @@ class CastMember {
         this.width = properties.width || 0;
         this.height = properties.height || 0;
         this.scriptFile = null;
+        this.image = properties.image || null;
         this.palette = properties.palette || null;
+        this.paletteFile = properties.paletteFile || null;
         this.checksum = properties.checksum || null;
 
         // Shape specifics
@@ -310,7 +312,10 @@ class CastMember {
             modified: this.modified,
             loaded: this.loaded, // If available
             checksum: this.checksum,
+            outcome: this.outcome,
             format: this.format,
+            image: this.image,
+            paletteFile: this.paletteFile,
             scriptFile: this.scriptFile
         };
 

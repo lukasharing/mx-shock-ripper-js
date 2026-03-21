@@ -8,6 +8,8 @@ const zlib = require('zlib');
 const DataStream = require('./utils/DataStream');
 const { Magic, AfterburnerTags, Limits } = require('./Constants');
 
+const KNOWN_TAGS = new Set(Object.values(Magic));
+
 class DirectorFile {
     constructor(source, logger, length = 0) {
         if (typeof source === 'number') {
@@ -47,13 +49,42 @@ class DirectorFile {
         }
     }
 
-    getChunkById(id) {
-        let physicalId = id;
-        if (this.fmap && this.fmap[id] !== undefined) {
-            physicalId = this.fmap[id];
-        }
-        const matches = this.chunks.filter(c => c.id === physicalId);
+    _findLastChunkById(targetId) {
+        const matches = this.chunks.filter(c => c.id === targetId);
         return matches.length > 0 ? matches[matches.length - 1] : null;
+    }
+
+    _isReadableChunk(chunk) {
+        return !!(chunk && chunk.len > 0 && chunk.off >= 0);
+    }
+
+    getChunkById(id) {
+        // For Afterburner payload reads, ABMP resource ids are the canonical lookup key.
+        // fmap is kept available for explicit alias use, but generic content reads should
+        // not silently remap ids through it because that can resolve to the wrong chunk type.
+        return this._findLastChunkById(id);
+    }
+
+    getMappedChunkById(id, { preferMapped = true, readableOnly = false } = {}) {
+        const directChunk = this._findLastChunkById(id);
+        if (!this.fmap || this.fmap[id] === undefined) {
+            if (!readableOnly || this._isReadableChunk(directChunk)) return directChunk;
+            return null;
+        }
+
+        const mappedChunk = this._findLastChunkById(this.fmap[id]);
+        const directOk = !readableOnly || this._isReadableChunk(directChunk);
+        const mappedOk = !readableOnly || this._isReadableChunk(mappedChunk);
+
+        if (preferMapped) {
+            if (mappedOk) return mappedChunk;
+            if (directOk) return directChunk;
+        } else {
+            if (directOk) return directChunk;
+            if (mappedOk) return mappedChunk;
+        }
+
+        return mappedChunk || directChunk || null;
     }
 
     async parse() {
@@ -115,7 +146,7 @@ class DirectorFile {
             const len = this.ds.readUint32();
             if (tag === Magic.IMAP || tag === Magic.imap || tag === Magic.pami) {
                 this.ds.skip(4);
-                mmapOff = (this.ds.endianness === 'little') ? this.ds.buffer.readUInt32LE(this.ds.position) : this.ds.buffer.readUInt32BE(this.ds.position);
+                mmapOff = this.ds.readUint32();
                 break;
             } else if (tag === Magic.MMAP || tag === Magic.mmap || tag === Magic.pamm) {
                 mmapOff = this.ds.position - 8;
@@ -330,8 +361,9 @@ class DirectorFile {
             this.log('ERROR', `loadInlineStream: Failed to decompress ILS chunk data.`);
             return;
         }
+        this._ilsBody = Buffer.from(decomp);
         
-        const ds = new DataStream(decomp, this.ds.endianness);
+        const ds = new DataStream(this._ilsBody, this.ds.endianness);
         
         let loadedCount = 0;
         while (ds.position + 1 < ds.length) {
@@ -403,7 +435,13 @@ class DirectorFile {
 
     static unprotect(tag) {
         if (!tag) return tag;
-        return AfterburnerTags[tag] || tag;
+        if (AfterburnerTags[tag]) return AfterburnerTags[tag];
+
+        const reversed = tag.split('').reverse().join('');
+        if (AfterburnerTags[reversed]) return AfterburnerTags[reversed];
+        if (KNOWN_TAGS.has(reversed)) return reversed;
+
+        return tag;
     }
 }
 

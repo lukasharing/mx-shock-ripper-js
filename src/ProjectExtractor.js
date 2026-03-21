@@ -124,7 +124,7 @@ class ProjectExtractor {
                             if (ds.position + 12 > keyData.length) break;
                             const sectionID = ds.readInt32();
                             const castID = ds.readInt32();
-                            const tag = ds.readFourCC();
+                            const tag = DirectorFile.unprotect(ds.readFourCC());
                             if (!memberMap[castID]) memberMap[castID] = {};
                             memberMap[castID][tag] = sectionID;
                             this.memberToCastMap.set(castID, absolutePath);

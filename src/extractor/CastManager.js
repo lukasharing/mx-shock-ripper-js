@@ -164,8 +164,8 @@ class CastManager {
             const logicalId = (metadata.invFmap && metadata.invFmap[chunk.id] !== undefined) ? metadata.invFmap[chunk.id] : chunk.id;
             const memberId = metadata.resToMember[logicalId] || logicalId;
 
-            if (tag === Magic.STXT || tag === Magic.TEXT || tag === Magic.stxt_lower || tag === Magic.text_lower || memberId === 105) {
-                this.extractor.log('INFO', `[CastManager] Orphan Chunk ${chunk.id} (logical ${logicalId}, tag ${tag}) -> Member ${memberId}`);
+            if (this.extractor.options.verbose === true && (tag === Magic.STXT || tag === Magic.TEXT || tag === Magic.stxt_lower || tag === Magic.text_lower || memberId === 105)) {
+                this.extractor.log('DEBUG', `[CastManager] Orphan Chunk ${chunk.id} (logical ${logicalId}, tag ${tag}) -> Member ${memberId}`);
             }
 
             // Scripts (LSCR) are mapped via LCTX, not KEY* table or 1:1 ID matching.
@@ -230,7 +230,7 @@ class CastManager {
                     metadata.keyTable[member.id][finalTag] = chunk.id;
                 }
             } else {
-                if (tag === Magic.STXT || tag === Magic.TEXT || tag === Magic.stxt_lower || tag === Magic.text_lower) {
+                if (this.extractor.options.verbose === true && (tag === Magic.STXT || tag === Magic.TEXT || tag === Magic.stxt_lower || tag === Magic.text_lower)) {
                     this.extractor.log('WARNING', `[CastManager] Failed to find member for orphaned text chunk ${chunk.id} (Member ${memberId})`);
                 }
             }
@@ -262,7 +262,7 @@ class CastManager {
     normalizeTag(tag) {
         if (!tag) return '';
         const t = tag.trim();
-        return AfterburnerTags[t] || AfterburnerTags[tag] || t;
+        return DirectorFile.unprotect(t) || DirectorFile.unprotect(tag) || t;
     }
 }
 
