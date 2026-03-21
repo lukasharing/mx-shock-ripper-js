@@ -10,6 +10,14 @@
 
 const { LingoConfig } = require('../Constants');
 
+let astLogger = null;
+
+function logAst(level, msg) {
+    if (typeof astLogger === 'function') {
+        astLogger(level, msg);
+    }
+}
+
 /**
  * Base Node class for all AST elements
  */
@@ -46,6 +54,7 @@ class Block extends Node {
         if (stmt) {
             stmt.parent = this;
             this.statements.push(stmt);
+            logAst('DEBUG', `[LingoAST] Block ${this.endPos} added statement: ${stmt.toString().substring(0, 50).trim()}`);
         }
     }
 
@@ -190,7 +199,7 @@ class ArgListLiteral extends Node {
  * Assignment: target = value
  */
 class AssignmentStatement extends Node {
-    constructor(target, value) { super(); this.target = target; this.value = value; }
+    constructor(target, value) { super(); this.target = target; this.value = value; this.isStatement = true; }
     buildString(arr, indent = "") {
         arr.push(indent);
         this.target.buildString(arr);
@@ -363,6 +372,7 @@ class CaseStatement extends Node {
         super();
         this.expr = expr;
         this.branches = [];
+        this.isStatement = true;
     }
 
     addBranch(branch) {
@@ -418,6 +428,7 @@ class RepeatWithStatement extends Node {
         this.end = end;
         this.down = down;
         this.block = new Block(this);
+        this.isStatement = true;
     }
     buildString(arr, indent = "") {
         arr.push(indent);
@@ -432,6 +443,7 @@ class RepeatWhileStatement extends Node {
         super();
         this.cond = cond;
         this.block = new Block(this);
+        this.isStatement = true;
     }
     buildString(arr, indent = "") {
         arr.push(indent); arr.push("repeat while ");
@@ -446,7 +458,7 @@ class RepeatWhileStatement extends Node {
  * Method return statement
  */
 class ReturnStatement extends Node {
-    constructor(value) { super(); this.value = value; }
+    constructor(value) { super(); this.value = value; this.isStatement = true; }
     buildString(arr, indent = "") {
         arr.push(indent); arr.push("return ");
         if (this.value) this.value.buildString(arr);
@@ -462,6 +474,25 @@ class ExitStatement extends Node {
 class ExitRepeatStatement extends Node {
     buildString(arr, indent = "") {
         arr.push(indent); arr.push("exit repeat");
+    }
+}
+
+/**
+ * Try/Catch statement: try ... catch ... end try
+ */
+class TryStatement extends Node {
+    constructor() {
+        super();
+        this.tryBlock = new Block(this);
+        this.catchBlock = new Block(this);
+        this.isStatement = true;
+    }
+    buildString(arr, indent = "") {
+        arr.push(indent); arr.push("try\n");
+        this.tryBlock.buildString(arr, indent + "  ");
+        arr.push(indent); arr.push("catch\n");
+        this.catchBlock.buildString(arr, indent + "  ");
+        arr.push(indent); arr.push("end try");
     }
 }
 
@@ -528,11 +559,14 @@ class ERROR extends Node {
 }
 
 module.exports = {
+    setLogger(logger) {
+        astLogger = (typeof logger === 'function') ? logger : null;
+    },
     Node, Block, Handler, VarReference, PropertyReference, LocalVarReference, ParamReference,
     Literal, IntLiteral, FloatLiteral, StringLiteral, SymbolLiteral,
     ListLiteral, PropListLiteral, ArgListLiteral, AssignmentStatement,
     CallStatement, ObjCallStatement, BinaryOperator, LogicalOperator,
     NotOperator, InverseOperator, IfStatement, CaseStatement, CaseBranch,
     RepeatWithStatement, RepeatWhileStatement,
-    ReturnStatement, ExitStatement, ExitRepeatStatement, MemberExpression, ChunkExpression, ERROR
+    ReturnStatement, ExitStatement, ExitRepeatStatement, TryStatement, MemberExpression, ChunkExpression, ERROR
 };

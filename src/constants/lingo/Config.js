@@ -49,7 +49,7 @@ module.exports = {
         LIST: 5,
         FLOAT_V4: 9
     },
-    COMMANDS_WITHOUT_PARENS: ['put', 'alert', 'set', 'go'],
+    COMMANDS_WITHOUT_PARENS: ['put', 'alert', 'set', 'go', 'try', 'catch'],
     Labels: {
         ProtectedScript: "[Protected Script]"
     },

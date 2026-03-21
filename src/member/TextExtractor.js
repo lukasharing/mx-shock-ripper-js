@@ -22,9 +22,11 @@ class TextExtractor extends GenericExtractor {
         if (!buffer || buffer.length === 0) return "";
 
         let content = "";
-
-        // DEBUG
-        console.log(`[TextExtractor] Extracting chunk ${options.chunkId || 'N/A'}: ${buffer.length} bytes. First 8 bytes: ${buffer.slice(0, 8).toString('hex')} (useRaw: ${options.useRaw})`);
+        const chunkId = options.chunkId || 'N/A';
+        this.log(
+            'DEBUG',
+            `[TextExtractor] Extracting chunk ${chunkId}: ${buffer.length} bytes. First 8 bytes: ${buffer.slice(0, 8).toString('hex')} (useRaw: ${!!options.useRaw})`
+        );
 
         // Detect modern 12-byte STXT header: [4:HdrSize][4:TxtSize][4:StyleSize]
         // HeaderSize.Stxt should be 12. Check if the first 4 bytes match the header size.

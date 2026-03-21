@@ -28,6 +28,7 @@ class LingoDecompiler {
     constructor(logger, extractor) {
         this.log = logger || ((lvl, msg) => { });
         this.extractor = extractor;
+        AST.setLogger(this.log);
     }
 
     /**
@@ -39,6 +40,7 @@ class LingoDecompiler {
      * @param {object} options - Options (e.g., { lasm: true }).
      */
     decompile(lscrData, nameTable, externalScriptType = 0, memberId = 0, options = {}) {
+        this.log('DEBUG', `[LingoDecompiler] Decompiling script ${memberId}`);
         try {
             if (!lscrData || lscrData.length < 132) {
                 return options.lasm ? { source: "-- Script buffer too small/empty", lasm: "" } : "-- Script buffer too small/empty";
@@ -54,6 +56,7 @@ class LingoDecompiler {
              */
             const nameCache = { 'handle': [], 'global': [], 'movie_prop': [], 'global_prop': [] };
             const getName = (id, type) => {
+                if (id === undefined || id === null) return `unk_${type}`;
                 let cacheGroup = nameCache[type];
                 if (!cacheGroup) { cacheGroup = []; nameCache[type] = cacheGroup; }
                 if (cacheGroup[id] !== undefined) return cacheGroup[id];
@@ -174,7 +177,7 @@ class LingoDecompiler {
                     try {
                         this._translate(bc, context);
                     } catch (e) {
-                        // Skip corrupted/unrecognized instructions
+                        this.log('ERROR', `Translation failed at pos ${bc.pos} (${bc.opcode}): ${e.message}\nStack: ${e.stack}`);
                     }
                 }
 
@@ -593,50 +596,60 @@ class LingoDecompiler {
                 break;
             }
 
-            case 'localcall': case 'extcall': case 'tellcall': case 'call': case 'call_ext':
+            case 'localcall': case 'extcall': case 'tellcall': case 'call': case 'call_ext': {
                 let callFn, callArgs = stack.pop();
                 if (op === 'localcall') {
-                    const targetIdx = ctx.handlers[bc.obj];
-                    callFn = targetIdx ? resolver(targetIdx.nameId, "handle") : `h_${bc.obj}`;
+                    const targetHandler = ctx.handlers[bc.obj];
+                    callFn = targetHandler ? resolver(targetHandler.nameId, "handle") : `handler_${bc.obj}`;
                 } else {
                     callFn = resolver(bc.obj, "handle");
                 }
 
-                if (['me', 'constant'].includes(callFn)) {
-                    let metaVal = (callArgs instanceof AST.ArgListLiteral && callArgs.value.length === 1) ? callArgs.value[0] : callArgs;
-                    if (callFn === 'me') stack.push(new AST.VarReference('me'));
-                    else stack.push(metaVal);  // 'constant' case
-                } else {
-                    let isDuplicateReturn = false;
-                    if (callFn === 'return') {
-                        const stmts = ast.currentBlock.statements;
-                        const last = stmts.length > 0 ? stmts[stmts.length - 1] : null;
-                        if (last && (last.constructor.name === 'ReturnStatement' || (last.constructor.name === 'CallStatement' && last.name === 'return'))) {
-                            isDuplicateReturn = true;
-                        }
-                    }
-                    if (!isDuplicateReturn) {
-                        const callExpr = new AST.CallStatement(callFn, callArgs);
-                        // Check if the arglist was created with pusharglistnoret
-                        if (callArgs?.noRet) {
-                            ast.addStatement(callExpr);
-                        } else {
-                            stack.push(callExpr);
-                        }
+                let isDuplicateReturn = false;
+                if (callFn === 'return') {
+                    const stmts = ast.currentBlock.statements;
+                    const last = stmts.length > 0 ? stmts[stmts.length - 1] : null;
+                    if (last && (last.constructor.name === 'ReturnStatement' || (last.constructor.name === 'CallStatement' && last.name === 'return'))) {
+                        isDuplicateReturn = true;
                     }
                 }
+                if (!isDuplicateReturn) {
+                    const callExpr = new AST.CallStatement(callFn, callArgs);
+
+                    // HABBO ORIGINS: Try/Catch transformation
+                    if (callFn === 'try') {
+                        const tryNode = new AST.TryStatement();
+                        ast.addStatement(tryNode);
+                        ast.enterBlock(tryNode.tryBlock);
+                        return; // No need to push to stack
+                    }
+
+                    // Check if the arglist was created with pusharglistnoret
+                    if (callArgs?.noRet) {
+                        ast.addStatement(callExpr);
+                    } else {
+                        stack.push(callExpr);
+                    }
+                }
+            }
                 break;
 
-            case 'pusharglist': case 'pusharglistnoret': case 'push_arg_list':
-                const argsArr = stack.splice(Math.max(0, stack.length - bc.obj), bc.obj);
+            case 'pusharglist': case 'push_arg_list':
+            case 'pusharglistnoret': case 'push_arg_list_no_ret': {
+                const count = bc.obj;
+                const onStack = (stack.length > count);
+                const noRet = op.includes('noret');
+                this.log(
+                    'DEBUG',
+                    `[LingoDecompiler] Stack before pusharglist(${count}, ${noRet}): ${stack._items.map(s => (s ? s.toString().substring(0, 30) : 'null')).join(', ')}`
+                );
+                const argsArr = stack.splice(Math.max(0, stack.length - count), count);
                 const argList = new AST.ArgListLiteral(argsArr);
-                if (op.includes('noret')) argList.noRet = true;
-                stack.push(argList); break;
-
-            case 'pop':
-                const poppedPop = stack.pop();
-                if (poppedPop?.toString()?.includes('(')) ast.addStatement(poppedPop);
+                argList.targetOnStack = onStack;
+                argList.noRet = noRet;
+                stack.push(argList);
                 break;
+            }
 
             case 'pushlist': case 'push_list':
                 const listArgs = stack.pop();
@@ -646,52 +659,118 @@ class LingoDecompiler {
                 const propArgs = stack.pop();
                 stack.push(new AST.PropListLiteral(propArgs instanceof AST.ArgListLiteral ? propArgs.value : (propArgs ? [propArgs] : []))); break;
 
-            case 'get': case 'set':
-                const invId = bc.obj & 0x3f;
-                const v4ref = LingoConfig.V4_SPRITE_PROPS[invId] ? new AST.VarReference('the ' + LingoConfig.V4_SPRITE_PROPS[invId]) : new AST.VarReference(`v4_${invId}`);
-                if (op === 'get') stack.push(v4ref); else ast.addStatement(new AST.AssignmentStatement(v4ref, stack.pop())); break;
+            case 'get': case 'set': {
+                const propertyID = stack.pop();
+                const propertyType = bc.obj;
+                const propVal = (propertyID instanceof AST.Literal) ? propertyID.value : propertyID;
 
-            case 'objcall': case 'objcallv4': case 'call_obj':
-                const oArgs = stack.pop(), oVals = (oArgs instanceof AST.ArgListLiteral) ? [...oArgs.value] : (oArgs ? [oArgs] : []);
-                if (op === 'objcall' && oVals.length === 0) break;
-                const oTarget = (op === 'objcall' || op === 'call_obj') ? oVals.shift() : new AST.VarReference(resolver(bc.obj, "handle"));
-                const oMethod = resolver(bc.obj, "handle");
+                let v4ref;
+                if (propertyType === 0x00 && typeof propVal === 'number' && propertyID instanceof AST.Literal) {
+                    const moviePropNames = ["floatPrecision", "mouseDownScript", "mouseUpScript", "keyDownScript", "keyUpScript", "timeoutScript", "short time", "abbr time", "long time", "short date", "abbr date", "long date"];
+                    v4ref = moviePropNames[propVal] ? new AST.VarReference('the ' + moviePropNames[propVal]) : new AST.VarReference(`movieProp_${propVal}`);
+                } else if (propertyType === 0x06) {
+                    // Sprite property
+                    const spriteID = stack.pop();
+                    const propName = LingoConfig.V4_SPRITE_PROPS[propVal] || `spriteProp_${propVal}`;
+                    v4ref = new AST.BinaryOperator('.', spriteID, new AST.VarReference(propName));
+                } else {
+                    v4ref = new AST.VarReference(`v4prop_${propertyType}_${propVal}`);
+                }
+
+                if (op === 'get') {
+                    stack.push(v4ref);
+                } else {
+                    const val = stack.pop();
+                    ast.addStatement(new AST.AssignmentStatement(v4ref, val));
+                }
+                break;
+            }
+
+            case 'objcall': case 'obj_call': case 'call_obj': case 'objcallv4': {
+                let callArgs = stack.pop();
+                let oMethod = resolver(bc.obj, "handle");
+                let oVals = (callArgs instanceof AST.ArgListLiteral) ? [...callArgs.value] : (callArgs ? [callArgs] : []);
+                let oTarget;
+
+                if (op === 'objcallv4') {
+                    oTarget = new AST.VarReference(resolver(bc.obj, "handle"));
+                } else if (callArgs instanceof AST.ArgListLiteral && callArgs.targetOnStack && stack.length > 0 && !stack.peek().isStatement) {
+                    oTarget = stack.pop();
+                } else if (oVals.length > 0) {
+                    oTarget = oVals.shift();
+                } else {
+                    oTarget = new AST.ERROR("Missing Object Target");
+                }
+
+                if (op === 'objcall' && oVals.length === 0 && oTarget instanceof AST.ERROR) break;
 
                 let objCallNode;
-                if (oMethod === 'count' && oVals.length === 1 && oVals[0] instanceof AST.VarReference) {
-                    objCallNode = new AST.BinaryOperator('.', oVals[0], new AST.VarReference('count'));
-                } else if (oMethod === 'getProp' && oVals.length === 2) {
-                    objCallNode = new AST.BinaryOperator('.', oVals[0], new AST.VarReference(oVals[1].toString().replace(/^#/, '')));
+                // Special cases for common Lingo methods
+                if (oMethod === 'count' && oVals.length === 1 && oVals[0] instanceof AST.Literal && (oVals[0].type === 'symbol' || oVals[0] instanceof AST.SymbolLiteral)) {
+                    const propRef = oVals[0].value;
+                    objCallNode = new AST.BinaryOperator('.', oTarget, new AST.VarReference(propRef + '.count'));
+                } else if (oMethod === 'getProp' && oVals.length === 1 && oVals[0] instanceof AST.Literal && (oVals[0].type === 'symbol' || oVals[0] instanceof AST.SymbolLiteral)) {
+                    const propRef = oVals[0].value;
+                    objCallNode = new AST.BinaryOperator('.', oTarget, new AST.VarReference(propRef));
                 } else if (oMethod === 'getAt' && oVals.length === 1) {
                     objCallNode = new AST.BinaryOperator('[]', oTarget, oVals[0]);
                 } else {
                     objCallNode = new AST.ObjCallStatement(oTarget, oMethod, new AST.ArgListLiteral(oVals));
                 }
 
-                if (oArgs?.noRet) ast.addStatement(objCallNode);
-                else stack.push(objCallNode);
+                if (callArgs?.noRet) {
+                    objCallNode.isStatement = true;
+                    ast.addStatement(objCallNode);
+                } else {
+                    stack.push(objCallNode);
+                }
                 break;
+            }
+
 
             case 'getobjprop': case 'get_prop_obj': case 'getchainedprop': {
-                const objP = stack.pop(), propId = resolver(bc.obj, "handle");
-                if (objP) stack.push(new AST.BinaryOperator('.', objP, new AST.VarReference(propId))); break;
+                const objP = stack.pop();
+                const propId = resolver(bc.obj, "handle");
+                if (objP) {
+                    stack.push(new AST.BinaryOperator('.', objP, new AST.VarReference(propId)));
+                } else {
+                    stack.push(new AST.VarReference('the ' + propId));
+                }
+                break;
             }
 
             case 'setobjprop': case 'set_prop_obj':
-                const setV = stack.pop(), setO = stack.pop();
-                if (setO) {
-                    const setPropName = resolver(bc.obj, "handle");
-                    if (setPropName === 'traceScript') {
-                        ast.addStatement(new AST.AssignmentStatement(new AST.PropertyReference("the traceScript"), setV));
-                    } else if (setO instanceof AST.VarReference && ['the traceScript', '_player', '_movie'].some(k => setO.toString().includes(k))) {
-                        ast.addStatement(new AST.AssignmentStatement(setO, setV));
-                    } else {
-                        ast.addStatement(new AST.AssignmentStatement(new AST.BinaryOperator('.', setO, new AST.VarReference(setPropName)), setV));
-                    }
-                } break;
+                const valS = stack.pop(), objS = stack.pop(), sPropId = resolver(bc.obj, "handle");
+                if (objS) {
+                    ast.addStatement(new AST.AssignmentStatement(new AST.BinaryOperator('.', objS, new AST.VarReference(sPropId)), valS));
+                } else {
+                    ast.addStatement(new AST.AssignmentStatement(new AST.VarReference('the ' + sPropId), valS));
+                }
+                break;
+
+            case 'pop':
+                const poppedPop = stack.pop();
+                if (poppedPop instanceof AST.CallStatement || poppedPop instanceof AST.ObjCallStatement) {
+                    ast.addStatement(poppedPop);
+                }
+                break;
 
             case 'jmpifz': case 'jmp_if_z': {
                 const blockEnd = bc.pos + bc.obj, condVal = stack.pop();
+
+                // HABBO ORIGINS: Catch transformation
+                // Detect 'if catch() then'
+                const isCatchCond = (condVal instanceof AST.CallStatement && condVal.name === 'catch') ||
+                                    (condVal instanceof AST.NotOperator && condVal.expr instanceof AST.CallStatement && condVal.expr.name === 'catch');
+
+                if (isCatchCond && ast.currentBlock.parent instanceof AST.TryStatement) {
+                    const tryNode = ast.currentBlock.parent;
+                    ast.exitBlock(); // Exit tryBlock
+                    tryNode.catchBlock.endPos = blockEnd;
+                    ast.enterBlock(tryNode.catchBlock);
+                    break;
+                }
+
                 if (ctx.activeCase && condVal instanceof AST.BinaryOperator && condVal.op === '=') {
                     const branch = new AST.CaseBranch([condVal.right]);
                     branch.block.endPos = blockEnd;
