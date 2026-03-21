@@ -1,31 +1,60 @@
-# Bitmap Extraction: Structure and Deterministic Algorithms
+# Bitmap Extraction
 
-This document describes how `mx-shock-ripper-js` parses and converts Adobe Director bitmap (`BITD`) chunks into standard PNG files.
+This document describes the current bitmap path implemented by `BitmapExtractor`.
 
-## Data Structure
+## Supported Source Chunks
 
-Shockwave bitmaps are stored in several related segments:
+Bitmap payloads may arrive through:
 
-- **BITD Chunk**: The primary container for pixel data. Can also be `DIB`, `Abmp`, or `PMBA` depending on format and protection.
-- **Header**: Contains `rowBytes`, `width`, `height`, and `bitDepth`.
-- **Palette**: Essential for indexed bitmaps (1, 2, 4, 8-bit) to map indices to RGB colors.
-- **Alpha Channel**: 32-bit bitmaps may use a planar structure (A, R, G, B planes) or a separate alpha mask.
+- `BITD`
+- `DIB`
+- `Abmp`
+- `PMBA`
 
-## Extraction Algorithm
+Protected or reversed forms are normalized before bitmap extraction starts.
 
-The `BitmapExtractor` follows a deterministic approach to identify image dimensions and compression:
+## Geometry Sources
 
-1. **Tag Resolution**: Scans for `BITD`, `DIB`, `DIB*`, `Abmp`, and `PMBA` tags to locate the most likely pixel data source.
-2. **Metadata Analysis**: Checks member bit depth and compression flags (PackBits, Zlib, or Raw).
-3. **Deterministic Size Matching**: Identifies padding and `rowBytes` by matching raw data size against expected dimensions.
-4. **Decompression**:
-    - **PackBits**: Handles standard RLE compression.
-    - **Zlib/Deflate**: Handles modern compressed assets.
-    - **Raw**: Processes uncompressed chunky or planar data.
-5. **Normalization**: Reconstructs planar or chunky pixel data into a unified 32-bit ARGB buffer.
-6. **PNG Generation**: Uses `pngjs` to produce optimized, transparent PNG output.
+The extractor does not trust a single geometry source. It builds candidate width/height sets from:
 
-## Special Cases
+1. the member spec rectangle (`_initialRect`)
+2. enriched cast metadata (`width`, `height`)
 
-- **Planar Reconstruction**: Handles both interleaved (row-by-row) and stacked (plane-by-plane) pixel distributions for high-depth assets.
-- **Registration Point Normalization**: Director stores registration points as absolute coordinates in an internal canvas space (often 1024x1024 or larger). `mx-shock-ripper-js` automatically normalizes these values by subtracting the `initialRect` offsets, providing relative coordinates required for modern engines.
+If no usable geometry can be derived, the bitmap is preserved as raw data instead of silently discarded.
+
+## Decompression Strategy
+
+For each candidate depth and geometry pair, the extractor tries multiple payload interpretations:
+
+- raw
+- PackBits
+- zlib
+- zlib followed by PackBits
+- row-based PackBits variants for legacy content
+
+Row-byte padding is tested across several alignment values until a consistent configuration is found.
+
+## Pixel Reconstruction
+
+Once a valid layout is identified, the extractor converts the source into RGBA output:
+
+- indexed depths `1/2/4/8` use a resolved palette
+- `16-bit` pixels are unpacked as 5-bit RGB
+- `32-bit` bitmaps support chunky and planar variants
+- optional `ALFA` data overrides or augments per-pixel alpha
+
+The final image is written through `pngjs`.
+
+## Palette Interaction
+
+For indexed images the extractor prefers a caller-supplied palette, otherwise it asks `Palette.resolveMemberPalette()`.
+
+If `--colored` is disabled, low-depth images intentionally fall back to grayscale rendering.
+
+## Fallback Behavior
+
+Bitmap extraction is designed to preserve questionable assets rather than fail closed:
+
+- dummy/empty bitmap payloads are skipped
+- payloads with data but no recoverable geometry are saved as raw `.dat`
+- unmatched payloads log an error instead of emitting a misleading PNG

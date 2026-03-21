@@ -34,7 +34,7 @@
 
         .links {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
             gap: 1rem;
             margin-top: 2rem;
         }
@@ -119,6 +119,42 @@
             <a href="doc/10_ShapeExtraction.md" class="card">
                 <h3>10. Shape Extraction</h3>
                 <p>Converting geometric primitives (Rect, Oval, Line) to modern SVG.</p>
+            </a>
+            <a href="doc/11_VectorExtraction.md" class="card">
+                <h3>11. Vector Extraction</h3>
+                <p>Why Vector Shape members are currently preserved as raw binary.</p>
+            </a>
+            <a href="doc/12_OutputManifest.md" class="card">
+                <h3>12. Output Manifest</h3>
+                <p>How `members.json` records artifacts, outcomes, and extraction stats.</p>
+            </a>
+            <a href="doc/13_TextAndFieldExtraction.md" class="card">
+                <h3>13. Text and Field</h3>
+                <p>RTF wrapping, raw passthrough, and the current text decode model.</p>
+            </a>
+            <a href="doc/14_FilmLoopAndMovieMembers.md" class="card">
+                <h3>14. FilmLoop and Movie</h3>
+                <p>Score-style timeline JSON export and current Movie member limits.</p>
+            </a>
+            <a href="doc/15_FontExtraction.md" class="card">
+                <h3>15. Font Extraction</h3>
+                <p>Signature-based TTF/OTF detection inside Director font wrappers.</p>
+            </a>
+            <a href="doc/16_DigitalVideoExtraction.md" class="card">
+                <h3>16. Digital Video</h3>
+                <p>Embedded QuickTime and AVI recovery from Director video members.</p>
+            </a>
+            <a href="doc/17_FlashExtraction.md" class="card">
+                <h3>17. Flash Extraction</h3>
+                <p>SWF signature scanning and wrapper stripping for Flash members.</p>
+            </a>
+            <a href="doc/18_XtraExtraction.md" class="card">
+                <h3>18. Xtra Extraction</h3>
+                <p>Embedded plugin preservation with light platform-specific detection.</p>
+            </a>
+            <a href="doc/19_GenericAndMetadataOnlyMembers.md" class="card">
+                <h3>19. Other Members</h3>
+                <p>Picture, Button, RTE, Transition, Mesh, and unknown-type handling.</p>
             </a>
         </div>
     </main>

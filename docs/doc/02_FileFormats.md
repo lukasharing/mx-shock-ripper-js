@@ -1,43 +1,65 @@
-# Director File Formats & Internals
+# Director File Formats and Internals
 
-Background information on the binary structure of Director files processed by this tool.
+This project works against Director RIFX containers used by `.dcr`, `.cct`, and `.cst` files.
 
-## RIFX Container
+## RIFX Container Basics
 
-Director files use the **RIFX** (Resource Interchange File Format - Extended) structure, detailed as follows:
+- `RIFX`: big-endian Director container
+- `XFIR`: little-endian Director container
+- `mmap` / `imap`: chunk map used to locate sections
+- `FGDC`: Afterburner-compressed payload wrapper
+- `ILS `: Initial Load Segment body used by some Afterburned files for inline resident chunks
 
--   **Header**: `RIFX` (Big Endian) or `XFIR` (Little Endian).
--   **Map**: Usually `mmap` or `IMAP`. Contains pointers to all other chunks in the file.
--   **Afterburner**: Compresssed files (`FGDC`) are "Afterburned" (Zlib compressed). The extractor handles decompression transparently via `DirectorFile`.
+The extractor normalizes chunk tags before higher-level processing. That includes both known Afterburner aliases and reversed/protected FourCC forms such as `DTIB -> BITD`, `AFLA -> ALFA`, `TULC -> CLUT`, and `FCRD -> DRCF`.
 
-### Key Chunks
+## Important Chunk Types
 
-| Magic Tag | Name | Description |
+| Tag | Meaning | Notes |
 | :--- | :--- | :--- |
-| `KEY*` | Key Table | Maps logical Resource IDs (CastMember IDs) to Chunk IDs (Indices in the file). |
-| `Lnam` | Name Table | Stores variable and handler names for Lingo scripts. |
-| `CASt` | Cast Member | Contains metadata (type, name, size, rectangle) for a single member. |
-| `Lscr` | Script | Compiled Lingo bytecode. |
-| `Lctx` | Lingo Context | Maps Script IDs to `Lscr` chunks (essential for generic script extraction). |
-| `MCsL` | Movie Cast List | (Movie only) List of external cast libraries (.cct) linked to the movie. |
-| `VWSc` | Score | (Movie only) Timeline data (frames, channels, sprite placement). |
+| `KEY*` | Resource key table | Maps logical member/resource IDs to chunk IDs |
+| `CASt` | Cast member metadata | Member header, name, flags, geometry, spec tables |
+| `BITD` / `DIB` / `Abmp` / `PMBA` | Bitmap payload | Image data, sometimes protected or compressed |
+| `ALFA` | Alpha plane | Optional bitmap alpha mask |
+| `CLUT` | Palette payload | Palette member body |
+| `Lscr` | Compiled Lingo bytecode | Decompiled by `LingoDecompiler` |
+| `Lctx` | Script context map | Resolves script IDs to `Lscr` chunks |
+| `Lnam` | Name table | Symbol table used during decompilation |
+| `DRCF` / `VWCF` | Movie config | Stage info, default palette, member ranges |
+| `VWSc` | Score/timeline | Frame/channel data |
+| `MCsL` | Movie cast list | Linked external casts for `.dcr` projects |
 
-## Preload Modes (MCsL)
+## Afterburner Notes
 
-The `MCsL` chunk defines external casts and their load behavior:
+Afterburned files can differ from standard RIFX files in two ways that matter to the extractor:
 
--   **Mode 0**: Load When Needed.
--   **Mode 1**: Load After Frame 1.
--   **Mode 2**: Load Before Frame 1.
+1. Chunk tags may be protected or reversed.
+2. Actual chunk data may live inside the decompressed ILS body rather than at the physical file offset listed in the outer map.
 
-These flags are extracted into `castlibs.json`.
+`DirectorFile` handles both cases so downstream systems can work against normalized chunk metadata.
+For content lookup, the extractor now treats the direct resource ids exposed by `ABMP` as canonical. `fmap` is retained only as an explicit alias map for special cases and should not be used as a generic payload resolver.
 
-## Member Type IDs
+## `MCsL` Preload Modes
 
-Refer to `Constants.js` for the full Enum `MemberType`. Common IDs:
+The `MCsL` table exposes how linked casts should be loaded by Director:
 
--   `1`: Bitmap
--   `4`: Palette
--   `6`: Sound
--   `11`: Script
--   `18`: Vector Shape
+- `0`: load when needed
+- `1`: load after frame 1
+- `2`: load before frame 1
+
+These values are preserved in `castlibs.json`.
+
+## Common Member Types
+
+Refer to `src/constants/MemberType.js` for the full enum. Frequently encountered values:
+
+- `1`: Bitmap
+- `2`: FilmLoop
+- `3`: Text
+- `4`: Palette
+- `6`: Sound
+- `8`: Shape
+- `11`: Script
+- `13`: Field
+- `16`: Font
+- `18`: VectorShape
+- `19`: Flash

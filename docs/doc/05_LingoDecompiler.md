@@ -1,49 +1,65 @@
-# Lingo Decompiler: Name Table Calibration & Context Steering
+# Lingo Decompiler
 
-Shockwave Project uses a sophisticated obfuscation technique involving scrambled `Lnam` (Name Table) chunks. This document details the technical breakthroughs required to achieve high-fidelity decompilation.
+This document describes the current decompiler model in `src/lingo/LingoDecompiler.js`.
 
-## The Scrambling Challenge
+## Name Table Selection
 
-In standard Director files, symbols in bytecode (`pushvarref`, `getprop`, etc.) map directly to indices in the `Lnam` chunk. However, Shockwave's `fuse_client` employs:
-1.  **Multiple Name Tables**: 88+ `Lnam` chunks distributed throughout the file.
-2.  **Categorical Shifts**: Handlers, Global Properties, and Movie Properties often have independent relative offsets.
-3.  **Context Misalignment**: Scripts are not always stored linearly next to their relevant `Lnam`.
+Director files can contain multiple `Lnam` chunks. The extractor chooses the active name table in two stages:
 
-## Technical Breakthroughs
+1. Prefer the `Lctx`-linked `Lnam` when `MetadataManager` can map the script logically.
+2. Fall back to the nearest preceding `Lnam` in physical chunk order.
 
-### 1. Context Steering (Nearest Preceding Lnam)
-The `DirectorExtractor` implements a "Nearest Preceding" logic. Since `mmap` chunks aren't always sequential, the extractor identifies the physical index of a script's `Lscr` chunk and searches backwards for the closest `Lnam`. This ensures the script is decompiled against the environment it was compiled in.
+That is the current replacement for the older `traceScript`-probe workflow. The `traceScript` calibration heuristic is no longer part of the intended design.
 
-### 2. Categorical Shift Calibration (The Probe Technique)
-We use a multi-stage heuristic to detect the scrambling "Shift" for three distinct categories:
+## Calibration Model
 
-#### Handler Alignment
-We look for the common `new` (or `construct`) symbol in the Name Table. By comparing its index to the `nameId` of the first handler in the `HAND` chunk, we calculate:
-`Shift = (BytecodeID - NameTableIndex + NameTableLength) % NameTableLength`
+The active calibration logic is intentionally narrower than older versions:
 
-#### Global/Movie Property Alignment
-We scan the bytecode of the first handler for the `traceScript` property access pattern (`the traceScript` or `_movie.traceScript`). 
--   `0x1C` (GETTOPLEVELPROP) -> Calibrates **Global Shift**
--   `0x5C` (GETMOVIEPROP) -> Calibrates **Movie Shift**
+- handler names use a relative shift derived from the first `HAND` entry
+- the usual anchor names are `new` and `construct`
+- global and movie-property shifts currently default to zero unless future logic overrides them
 
-### 3. Internal Handler Resolution (Index-Based)
-Crucially, internal calls (`localcall`) in modern Lingo files do **not** use name IDs. Instead, they refer to the handler's index within the `HAND` table of the current `Lscr` chunk. Our decompiler correctly maps these indices back to the calibrated handler names.
+The implementation still applies a small set of hard-coded Shockwave-oriented symbol overrides for names such as `_movie`, `_player`, `traceScript`, and `type`. That is a pragmatic compatibility layer, not a general Director truth.
 
-### 4. 0-Based Baseline
-While some tools assume 1-based indexing for Lingo, our analysis confirmed that for Director 4-8.5 (V4-V93), a **0-based** baseline combined with the categorical shift is the most stable model for Shockwave.
+## Internal Call Resolution
 
-## Opcode Specifics
+`localcall` is resolved by handler-table index, not by `Lnam` symbol ID. The decompiler reads the current script's `HAND` table and maps the target entry back to a handler name.
 
-### V4 (Director 4.0) Differences
-Older scripts (like `Event Agent Class`) use a fixed 46-byte entry size in the `HAND` segment and specialized `GET`/`SET` opcodes (`0x1C`/`0x1D`) that map to a hardcoded property table (e.g., `iv 21` -> `the rect`). Our decompiler includes a manual mapping for these legacy properties.
+This matches the behavior seen in ProjectorRays and ScummVM for modern Lingo bytecode.
 
+## AST Reconstruction
 
-### Complex Loops
-Decompiling `repeat with ... down to` requires monitoring the stack for `peek` opcodes and reconstructing the `(start, end, variable)` triplet.
+The bytecode translator is stack-based:
 
-## Output Formats
+- literals are loaded from `LIT ` / `LTD `
+- property declarations come from `PROP`
+- handlers come from `HAND`
+- each handler is translated into AST nodes and then serialized back to Lingo source
 
-The extractor produces two files for every script member:
-1.  **`.lsc` (Compiled Bytecode)**: The raw binary content of the `Lscr` chunk. Always extracted for preservation.
-2.  **`.ls` (Lingo Source)**: The decompiled text. Only generated if the decompiler successfully processes the bytecode.
+Recovered structures include:
 
+- handler definitions
+- `if` / `else`
+- `case`
+- `repeat while`
+- common calls, assignments, and property access
+
+## Director 4 / Legacy Support
+
+Legacy V4 scripts use a different handler table layout and distinct `get` / `set` property opcodes. The decompiler has a dedicated V4 path with a fixed handler entry size and a manual legacy property map.
+
+## Current Caveats
+
+The decompiler is usable, but not complete. Known weak points today include:
+
+- ad hoc symbol overrides through `SPECIAL_IDS`
+- incomplete V4 property coverage
+- object-call reconstruction in some edge cases
+- variable recovery failures that can still produce translation warnings on malformed or unusual bytecode
+
+## Script Outputs
+
+The standard CLI script output is:
+
+- `.ls`: decompiled source
+- `.lasm`: optional assembly-style dump when `--lasm` is enabled

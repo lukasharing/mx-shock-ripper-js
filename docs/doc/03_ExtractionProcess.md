@@ -1,35 +1,94 @@
 # Extraction Process
 
-This document outlines the step-by-step logic executed by `DirectorExtractor` to turn a binary file into assets.
+This document describes the current `DirectorExtractor` pipeline.
 
-## 1. Initialization
--   **Input**: The path to a `.dcr` or `.cct` file.
--   **Parsing**: The file is read into a buffer and parsed by `DirectorFile`. This builds a list of Chunk headers.
--   **Validation**: The file signature (`RIFX`, `XFIR`) and version (`MV93`, etc.) are checked.
+## 1. Parse and Normalize the Container
 
-## 2. Resource Mapping
--   **Key Table**: The `KEY*` chunk is parsed first. This table maps internal Resource IDs (used by cast members) to absolute Chunk IDs in the file.
--   **Name Table**: The `Lnam` chunk is parsed to build a dictionary of strings used by scripts (variable names, handler names).
+- Open the input file with a shared file descriptor.
+- Parse the RIFX/XFIR header and chunk map through `DirectorFile`.
+- If the file is Afterburned, decompress the `FGDC` payload and cache the ILS body for inline resident chunks.
+- Normalize protected and reversed chunk tags before they reach metadata or extraction code.
 
-## 3. Metadata Extraction
-Before processing assets, global metadata is extracted:
--   **Config (`VWCF` / `DRCF`)**: Movie stage size, frame rate, version. Saved to `movie.json`.
--   **Timeline (`VWSc`)**: Score data (frames, channels). Saved to `timeline.json`.
--   **Cast Libs (`MCsL`)**: For Movies (`main.dcr`), this table lists all external `.cct` files needed. Saved to `castlibs.json` with `preloadMode` flags.
+## 2. Build Metadata Tables
 
-## 4. Cast Member Discovery
-The extractor makes a first pass over all `CASt` chunks:
-1.  **Parse Header**: Reads member type, name, script text size, etc.
-2.  **Register**: Adds the member to the internal manifest (`this.members`).
-3.  **Pre-Process**: Collects Palettes (`CLUT`) immediately as they are dependencies for Bitmaps.
+`MetadataManager` performs the first metadata pass:
 
-## 5. Content Extraction (Type-Specific)
-A second pass iterates through the members and invokes sub-extractors:
--   **Bitmaps**: Finds the linked `BITD` chunk (or `DIB`/`Abmp`/`PMBA`). Decompresses image data. Applies `CLUT` (Palette) and `ALFA` (Alpha Mask). Exports `.png`.
--   **Scripts**: Finds `Lscr` or `STXT`. Extracts both compiled bytecode (`.lsc`) and decompiled source (`.ls`).
--   **Sounds**: Finds `SND ` or `medi`. Wraps data in a WAV header or dumps raw MP3 data.
--   **Text**: Decodes styled text chunks.
+- parse `KEY*` into a logical resource map
+- parse `MCsL` and build cast ordering / external cast linkage
+- parse every available `Lnam` table
+- parse `DRCF` / `VWCF` movie configuration, including palette defaults when present
+- load optional `shared_palettes.json` from the input directory
 
-## 6. Output Generation
--   **Assets**: Saved to the output directory.
--   **Manifest**: A `members.json` (or merged `movie.json`) is written, listing all extracted members with metadata and checksums.
+## 3. Discover and Enrich Cast Members
+
+`CastManager` then walks the file and builds `CastMember` objects:
+
+1. Seed members from authoritative chunk references.
+2. Fold in `CASt` metadata and type-specific specs.
+3. Reassign member types from content chunks when the original member header is weak or protected.
+4. Drop obvious empty/null placeholders from the final manifest stage.
+
+## 4. Load Palette Dependencies
+
+Before the worker pool starts, palette members are parsed so bitmap and shape extraction can resolve color information. This step runs when any of these are enabled:
+
+- `--palette`
+- `--bitmap`
+- `--shape`
+- `--colored`
+
+Palette output files are only written when `--palette` is explicitly enabled.
+
+## 5. Queue Selectable Member Work
+
+The main processing queue is filtered by the requested extraction flags. Only selected member types are sent to workers.
+
+Each task includes:
+
+- normalized chunk metadata
+- key table mappings
+- script context/name-table info
+- resolved palette data for bitmap/shape members
+- the previous checksum from `members.json`, when available
+
+## 6. Worker Extraction
+
+Workers read chunk data directly from the shared descriptor or from cached ILS data for inline chunks.
+
+Per-member behavior includes:
+
+- bitmaps: decode payload, resolve palette, apply alpha, write `.png` or fall back to raw data
+- scripts: resolve `Lscr`, select the best name table, decompile to `.ls`, optionally emit `.lasm`
+- text/fields: write `.rtf` unless the name already implies a raw text-like extension
+- palettes: format as JASC-PAL `.pal`
+- sounds: write `.wav`, `.mp3`, or codec-specific binary output depending on the source
+- filmloops: emit heuristic timeline JSON ending in `.filmloop.json`
+- digital video: strip Director wrapper bytes and preserve `.mov`, `.avi`, or raw `.dat`
+- flash: strip wrapper bytes and preserve `.swf` or raw `.dat`
+- xtras: preserve embedded plugin payloads as `.x32`, `.bundle`, or `.dat`
+- unknown/generic payloads: persist `.bin` output and count that as a successful extraction
+
+If a member checksum matches the previous manifest and `--force` is not set, the worker reports `SKIP` and the old artifact metadata is restored.
+
+Worker outcomes are now classified more explicitly than the old generic `no_output` bucket. The manifest distinguishes unresolved references, placeholder-only sources, empty assets, and unsupported content so extraction misses are easier to interpret.
+
+Normal logging is intentionally summarized:
+
+- per-member placeholder/external skip spam is collapsed into end-of-run summaries
+- progress is logged at coarse milestones instead of once per member
+- worker `DEBUG` chatter is suppressed unless `--verbose` is enabled
+
+Real worker errors, unsupported-content warnings, and geometry recovery messages still remain visible.
+
+## 7. Finalization
+
+After worker completion, `DirectorExtractor`:
+
+- runs dangling-script matching when script extraction is enabled
+- finalizes cast-lib metadata
+- normalizes manifest output fields
+- writes `members.json`
+- writes `movie.json`, `timeline.json`, and `castlibs.json` when available
+- writes `<input>_extraction.log`
+
+The `members.json` file stores per-member artifact references under `image`, `paletteFile`, and `scriptFile`.

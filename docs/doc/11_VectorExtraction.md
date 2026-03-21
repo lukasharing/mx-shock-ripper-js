@@ -20,10 +20,10 @@ Adobe Director supports two distinct types of vector-based members, which evolve
 *   **Capabilities**: Full Bézier curves, complex paths, gradients, anti-aliasing, and fill styles.
 *   **Storage**: Stored in a complex binary stream (often chunked as `dvect`) containing proprietary opcodes for path construction.
 *   **Extraction**: Handled by `VectorShapeExtractor.js`.
-    *   **Strategy**: Due to the proprietary and undocumented nature of the binary format, and the lack of a known open-source parser, these members are extracted as **Raw Binary Data** (`.dat`).
-    *   **Output**: `.dat` (Raw Binary).
-*   **CLI Flag**: `--vector`
+    *   **Strategy**: Due to the proprietary and undocumented nature of the binary format, and the lack of a known open-source parser, these members are extracted as **Raw Binary Data** (`.bin`).
+    *   **Output**: `.bin` (Raw Binary).
+*   **CLI Flag**: currently covered by `--shape` rather than a separate `--vector` switch.
 
 ## Why Separate Extractors?
 
-While `ShapeExtractor` can easily produce SVG output because it deals with simple fixed metadata, `VectorShapeExtractor` deals with a complex stream. Currently, we dump the raw stream for `VectorShape` to preserve the data for future analysis, as writing a custom parser for the `dvect` format is outside the current scope.
+While `ShapeExtractor` can easily produce SVG output because it deals with simple fixed metadata, `VectorShapeExtractor` deals with a complex stream. Currently, the extractor preserves the raw payload for future analysis instead of attempting a partial or lossy SVG conversion.
