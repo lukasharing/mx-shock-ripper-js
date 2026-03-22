@@ -1,5 +1,5 @@
 # mx-shock-ripper-js
-![Version](https://img.shields.io/badge/version-1.5.2-blue)
+![Version](https://img.shields.io/badge/version-1.5.3-blue)
 ![Build](https://img.shields.io/badge/build-stable-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -26,7 +26,7 @@ npm install mx-shock-ripper-js
 ## CLI Usage
 
 ```text
-mx-shock-ripper-js - Production Grade Director Asset Ripper v1.5.2
+mx-shock-ripper-js - Production Grade Director Asset Ripper v1.5.3
 
 Usage:
   mx-rip <input_file> [output_dir] [options]
@@ -56,6 +56,25 @@ mx-rip furniture.cst ./output --bitmap --palette --force
 ```
 
 If no extraction-type flags are supplied, the CLI enables the supported extractors by default and leaves `--colored` off.
+
+## Regression Tests
+
+```bash
+npm test
+npm run test:fixtures
+npm run test:regression
+```
+
+- `npm test` runs the fast unit regression checks for canonical member-tag mapping and KEY parsing.
+- `npm run test:fixtures` runs cast-backed regression checks for queue selection, artifact emission, and `members.json` accounting.
+- `npm run test:regression` runs both layers together.
+
+Fixture tests auto-detect `/Users/lukasharing/Documents/HabboDecomp/fuse_client.cct` and can also be pointed at local casts with:
+
+```bash
+MX_FIXTURE_FUSE_CLIENT=/abs/path/fuse_client.cct npm run test:fixtures
+MX_FIXTURE_HH_IG_INTERFACE=/abs/path/hh_ig_interface.cct npm run test:fixtures
+```
 
 ## Library Usage
 

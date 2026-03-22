@@ -25,6 +25,7 @@ module.exports = {
     SND_STAR: 'SND*', // Sound Variant
     STXT: 'STXT', // Script Text (Lingo source)
     TEXT: 'TEXT', // Text Member Content
+    TXTS: 'TXTS', // Alternate Text payload
     ALFA: 'ALFA', // Alpha Mask
     SHAP: 'SHAP', // Shape Data
     XTRA: 'XTRA', // Xtra Data
