@@ -5,8 +5,9 @@ const crypto = require('crypto');
 const DirectorFile = require('../DirectorFile');
 const CastMember = require('../CastMember');
 const DataStream = require('../utils/DataStream');
+const KeyTableParser = require('../utils/KeyTableParser');
 const { Palette } = require('../utils/Palette');
-const { Magic, AfterburnerTags, MemberType, Offsets, KeyTableValues } = require('../Constants');
+const { Magic, AfterburnerTags, Offsets, Limits } = require('../Constants');
 
 class MetadataManager {
     constructor(extractor) {
@@ -43,6 +44,92 @@ class MetadataManager {
         return hash.digest('hex');
     }
 
+    ensureInvFmap() {
+        if (this.invFmap || !this.extractor.dirFile.fmap) return;
+        this.invFmap = {};
+        for (const [logical, physical] of Object.entries(this.extractor.dirFile.fmap)) {
+            this.invFmap[physical] = parseInt(logical, 10);
+        }
+    }
+
+    resolveMemberIdFromResource(resourceId, { allowSelf = true } = {}) {
+        if (!Number.isInteger(resourceId) || resourceId <= 0) return null;
+
+        this.ensureInvFmap();
+        const logicalId = (this.invFmap && this.invFmap[resourceId] !== undefined) ? this.invFmap[resourceId] : resourceId;
+        const candidates = [];
+        const pushCandidate = (value) => {
+            if (!Number.isInteger(value) || value <= 0 || value >= Limits.MaxCastSlots) return;
+            if (!candidates.includes(value)) candidates.push(value);
+        };
+
+        pushCandidate(this.resToMember[logicalId]);
+        pushCandidate(this.resToMember[resourceId]);
+
+        const members = Array.isArray(this.extractor.members) ? this.extractor.members : [];
+        const linkedMember = members.find(member => member && (
+            member.originalSlotId === logicalId ||
+            member.originalSlotId === resourceId ||
+            member.scriptId === logicalId ||
+            member.scriptId === resourceId
+        ));
+        if (linkedMember) pushCandidate(linkedMember.id);
+
+        for (const member of members) {
+            const map = this.keyTable[member.id];
+            if (!map) continue;
+            if (Object.values(map).some(value => value === logicalId || value === resourceId)) {
+                pushCandidate(member.id);
+                break;
+            }
+        }
+
+        if (this.extractor.castOrder) {
+            pushCandidate(this.extractor.castOrder[logicalId]);
+            pushCandidate(this.extractor.castOrder[resourceId]);
+        }
+
+        if (this.castList) {
+            pushCandidate(this.castList[logicalId]);
+            pushCandidate(this.castList[resourceId]);
+        }
+
+        for (const [scriptKey, sectionId] of Object.entries(this.lctxMap || {})) {
+            if (sectionId !== logicalId && sectionId !== resourceId) continue;
+
+            const numericScriptId = parseInt(scriptKey, 10);
+            const memberByScriptId = members.find(member => member && (member.scriptId === numericScriptId || member.id === numericScriptId));
+            if (memberByScriptId) pushCandidate(memberByScriptId.id);
+            pushCandidate(numericScriptId);
+            break;
+        }
+
+        if (allowSelf) {
+            pushCandidate(logicalId);
+            pushCandidate(resourceId);
+        }
+
+        return candidates[0] || null;
+    }
+
+    logKeyTableSummary(layout, entries) {
+        const tagCounts = {};
+        for (const entry of entries) {
+            if (!entry.tag) continue;
+            tagCounts[entry.tag] = (tagCounts[entry.tag] || 0) + 1;
+        }
+
+        const tagSummary = Object.entries(tagCounts)
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([tag, count]) => `${tag}:${count}`)
+            .join(', ');
+
+        this.extractor.log(
+            'INFO',
+            `[MetadataManager] Parsed KEY*: variant=${layout.variant}, entrySize=${layout.entrySize}, used=${entries.length}/${layout.usedCount}, members=${Object.keys(this.keyTable).length}${tagSummary ? `, tags={${tagSummary}}` : ''}`
+        );
+    }
+
     async parseKeyTable() {
         const keyChunks = this.extractor.dirFile.getChunksByType(Magic.KEY).concat(this.extractor.dirFile.getChunksByType('KEY '));
         const keyChunk = keyChunks[0];
@@ -52,72 +139,28 @@ class MetadataManager {
 
         if (!data || data.length < 12) return;
 
-        const ds = new DataStream(data, this.extractor.dirFile.ds.endianness);
-        let firstWord = ds.readUint16();
+        this.keyTable = {};
+        this.resToMember = {};
+        this.castList = [];
 
-        // Auto-calibrate endianness based on version word 0x0114 (276)
-        if (firstWord !== 0x0114 && firstWord !== 0x000C && firstWord !== 0x0002) {
-            const swapped = (firstWord >> 8) | ((firstWord & 0xFF) << 8);
-            if (swapped === 0x0114 || swapped === 0x000C || swapped === 0x0002) {
-                ds.endianness = ds.endianness === 'big' ? 'little' : 'big';
-                ds.seek(0);
-                firstWord = ds.readUint16();
-            }
-        }
+        const parsed = KeyTableParser.parse(data, this.extractor.dirFile.ds.endianness, (lvl, msg) => this.extractor.log(lvl, msg));
+        if (!parsed) return;
 
-        let headerSize = (firstWord === 0x0114 || firstWord === 0x1401) ? Offsets.KeyTableStandard : Offsets.KeyTableShort;
-
-        // Safety check: if buffer is too small for standard header, downgrade to short
-        if (headerSize === Offsets.KeyTableStandard && data.length < Offsets.KeyTableStandard) {
-            headerSize = Offsets.KeyTableShort;
-        }
-
-        let usedCount, totalCount;
-        if (headerSize === Offsets.KeyTableShort) {
-            ds.seek(4);
-            totalCount = ds.readUint32();
-            ds.seek(8);
-            usedCount = ds.readUint32();
-        } else {
-            ds.seek(12);
-            totalCount = ds.readUint32();
-            ds.seek(16);
-            usedCount = ds.readUint32();
-        }
-
-        // Determine entry size
-        // D5+ entries are 12 bytes: sectionID(4), castID(4), tag(4)
-        // D4 entries are 8 bytes: sectionID(4), tag(4). castID is implied as index (1-based)
-        const remainingSize = data.length - headerSize;
-        const entrySize = totalCount > 0 ? Math.floor(remainingSize / totalCount) : 12;
-
-        ds.seek(headerSize);
-        for (let i = 0; i < usedCount; i++) {
-            if (ds.position + entrySize > data.length) break;
-
-            let sectionID, castID, tag;
-
-            if (entrySize === Offsets.KeyEntryStandard) {
-                sectionID = ds.readInt32();
-                castID = ds.readInt32();
-                tag = DirectorFile.unprotect(ds.readFourCC());
-            } else if (entrySize === Offsets.KeyEntryShort) {
-                sectionID = ds.readInt32();
-                tag = DirectorFile.unprotect(ds.readFourCC());
-                castID = i + 1; // Implied index
-            } else {
-                ds.skip(entrySize);
+        const { layout, entries } = parsed;
+        for (const entry of entries) {
+            const { sectionID, castID, tag, index } = entry;
+            if (!tag) {
+                this.extractor.log('WARNING', `KEY* entry ${index} is missing a tag and was ignored.`);
                 continue;
             }
 
             if (!this.keyTable[castID]) this.keyTable[castID] = {};
             this.keyTable[castID][tag] = sectionID;
             this.resToMember[sectionID] = castID;
-
-            // Capture Cast Sort Order (Implicit Slot ID)
-            // Slot indices are 1-based (i+1)
-            this.castList[i + 1] = castID;
+            this.castList[index + 1] = castID;
         }
+
+        this.logKeyTableSummary(layout, entries);
 
         const allLctx = this.extractor.dirFile.getChunksByType(Magic.LCTX_UPPER)
             .concat(this.extractor.dirFile.getChunksByType(Magic.Lctx))
@@ -243,7 +286,7 @@ class MetadataManager {
                     slotIndex++;
                     continue;
                 }
-                const memberId = this.resToMember[sectionId] || sectionId;
+                const memberId = this.resolveMemberIdFromResource(sectionId) || sectionId;
                 this.extractor.castOrder[slotIndex] = memberId;
                 slotIndex++;
             }
@@ -375,7 +418,7 @@ class MetadataManager {
         // 4. LctX map lookup (Legacy fallback)
         if (this.lctxMap[paletteId]) {
             const sectionId = this.lctxMap[paletteId];
-            const memberId = this.resToMember[sectionId] || sectionId;
+            const memberId = this.resolveMemberIdFromResource(sectionId) || sectionId;
             resolved = checkMember(memberId);
             if (resolved) return resolved;
         }
@@ -389,14 +432,9 @@ class MetadataManager {
         const data = await this.extractor.dirFile.getChunkData(chunk);
         if (!data) return null;
 
-        if (!this.invFmap && this.extractor.dirFile.fmap) {
-            this.invFmap = {};
-            for (const [logical, physical] of Object.entries(this.extractor.dirFile.fmap)) {
-                this.invFmap[physical] = parseInt(logical, 10);
-            }
-        }
+        this.ensureInvFmap();
         const logicalId = (this.invFmap && this.invFmap[chunk.id] !== undefined) ? this.invFmap[chunk.id] : chunk.id;
-        const memberIdFromRes = this.resToMember[logicalId] || logicalId;
+        const memberIdFromRes = this.resolveMemberIdFromResource(logicalId) || logicalId;
 
         const member = CastMember.fromChunk(memberIdFromRes, data, this.extractor.dirFile.ds.endianness);
         member._chunkIndex = this.extractor.dirFile.chunks.indexOf(chunk);

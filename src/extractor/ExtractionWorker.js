@@ -16,6 +16,7 @@ const MovieExtractor = require('../member/MovieExtractor');
 const GenericExtractor = require('../member/GenericExtractor');
 const LingoDecompiler = require('../lingo/LingoDecompiler');
 const { MemberType, Magic, Resources } = require('../Constants');
+const { getPreferredSectionId } = require('../utils/MemberContent');
 
 /**
  * ExtractionWorker.js (Level 3 - Zero Contention)
@@ -177,13 +178,7 @@ parentPort.on('message', async (task) => {
             return;
         }
 
-        const sectionId = (map && (
-            map[Magic.STXT] || map[Magic.stxt_lower] ||
-            map[Magic.TEXT] || map[Magic.text_lower] ||
-            map[Magic.BITD] || map[Magic.ABMP] || map[Magic.DIB] ||
-            map[Magic.SND] || map[Magic.snd] || map[Magic.SND_STAR] ||
-            map[Magic.CAST] || map[Magic.CAS_STAR] || map[Magic.CAsT] || map[Magic.cast_lower]
-        )) || (map ? Object.values(map)[0] : 0);
+        const sectionId = (map && (getPreferredSectionId(map, member.typeId) || Object.values(map)[0])) || 0;
 
         let data = null;
         if (sectionId > 0) {

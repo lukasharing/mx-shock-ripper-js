@@ -39,6 +39,7 @@ const DataStream = require('./utils/DataStream');
 const { MemberType, Magic, Resources } = require('./Constants');
 const { Palette } = require('./utils/Palette');
 const Logger = require('./utils/Logger');
+const { getContentTagsForType, getMatchingTagsForType } = require('./utils/MemberContent');
 
 class DirectorExtractor extends BaseExtractor {
     constructor(inputPath, outputDir, options = {}) {
@@ -75,6 +76,7 @@ class DirectorExtractor extends BaseExtractor {
         this.stats = this.createStatsSnapshot();
         this.metadata = {};
         this.skipLogSummary = {};
+        this.queueDropSummary = {};
         this._lastLoggedProgressBucket = -1;
 
         // Sub-Extractor Instances
@@ -184,6 +186,10 @@ class DirectorExtractor extends BaseExtractor {
         this.skipLogSummary[reason] = (this.skipLogSummary[reason] || 0) + 1;
     }
 
+    trackQueueDrop(reason) {
+        this.queueDropSummary[reason] = (this.queueDropSummary[reason] || 0) + 1;
+    }
+
     shouldLogSkipIndividually(reason) {
         if (this.options.verbose === true) return true;
         return !['placeholder_source', 'unresolved_reference', 'unchanged', 'empty_asset'].includes(reason);
@@ -210,6 +216,15 @@ class DirectorExtractor extends BaseExtractor {
             if (!count || !labels[reason]) continue;
             this.log('INFO', `Skipped ${count} ${labels[reason]}.`);
         }
+    }
+
+    logQueueSelectionSummary(discoveredCount, selectedCount) {
+        const dropped = discoveredCount - selectedCount;
+        const parts = Object.entries(this.queueDropSummary)
+            .filter(([, count]) => count > 0)
+            .map(([reason, count]) => `${reason}:${count}`)
+            .join(', ');
+        this.log('INFO', `[DirectorExtractor] Queue selection: discovered ${discoveredCount}, selected ${selectedCount}, dropped ${dropped}${parts ? ` (${parts})` : ''}`);
     }
 
     shouldExtractMemberType(typeId) {
@@ -277,36 +292,37 @@ class DirectorExtractor extends BaseExtractor {
         }
 
         // Phase 4: Member Content Processing (Persistent Worker Pool)
-        const contentTags = [
-            Magic.CAST, Magic.CAS_STAR, Magic.CArT, Magic.cast_lower,
-            Magic.BITD, Magic.DIB, Magic.dib_star, Magic.bitd_lower,
-            Magic.STXT, Magic.stxt_lower, Magic.TEXT, Magic.text_lower, Magic.TXTS,
-            Magic.SND, Magic.snd_lower, Magic.snd_star,
-            Magic.VCSH // VectorShape content tag
-        ];
-
+        this.queueDropSummary = {};
         const seenIds = new Set();
         const processQueue = this.members.filter(m => {
-            if (seenIds.has(m.id)) return false;
+            if (seenIds.has(m.id)) {
+                this.trackQueueDrop('duplicate_member');
+                return false;
+            }
             seenIds.add(m.id);
 
-            if (!this.shouldExtractMemberType(m.typeId)) return false;
-            if (m.typeId === MemberType.Palette) return false;
+            if (!this.shouldExtractMemberType(m.typeId)) {
+                this.trackQueueDrop('filtered_by_option');
+                return false;
+            }
+            if (m.typeId === MemberType.Palette) {
+                this.trackQueueDrop('palette_preload_only');
+                return false;
+            }
 
             const map = this.metadataManager.keyTable[m.id] || {};
             const isLctxScript = m.typeId === MemberType.Script && (m.scriptId > 0 || this.metadataManager.lctxMap[m.id] !== undefined);
 
-            if (Object.keys(map).length === 0 && !isLctxScript) return false;
+            if (Object.keys(map).length === 0 && !isLctxScript) {
+                this.trackQueueDrop('no_key_map');
+                return false;
+            }
 
-            const primaryTag = this.getPrimaryTagForType(m.typeId);
-            const hasPrimary = primaryTag && map[primaryTag];
-
-            const tags = Object.keys(map);
-            const hasContent = tags.some(t => contentTags.includes(t));
-
-            if (!hasPrimary && !hasContent && !isLctxScript) {
+            const matchingTags = getMatchingTagsForType(map, m.typeId);
+            if (matchingTags.length === 0 && !isLctxScript) {
+                this.trackQueueDrop('no_matching_tags');
                 if (this.options.verbose) {
-
+                    this.log('DEBUG', `[DirectorExtractor] Queue drop member ${m.id} (${m.type}): keys={${Object.keys(map).join(', ')}}`);
                 }
                 return false;
             }
@@ -314,6 +330,7 @@ class DirectorExtractor extends BaseExtractor {
             return true;
         });
 
+        this.logQueueSelectionSummary(this.members.length, processQueue.length);
         this.stats.selected = this.buildStatsBucket(processQueue);
 
         const currentMembersJSON = path.join(this.outputDir, 'members.json');
@@ -635,19 +652,7 @@ class DirectorExtractor extends BaseExtractor {
     }
 
     getPrimaryTagForType(typeId) {
-        switch (typeId) {
-            case MemberType.Bitmap: return Magic.BITD;
-            case MemberType.Text:
-            case MemberType.Field: return Magic.STXT; // Prioritize STXT for metadata mapping, but TEXT is handled in worker
-            case MemberType.Script: return Magic.LSCR;
-            case MemberType.Sound: return Magic.SND;
-            case MemberType.Shape:
-            case MemberType.Button: return Magic.CAST;
-            case MemberType.VectorShape: return Magic.VCSH;
-            case MemberType.Movie: return Magic.VWCF;
-            case MemberType.Palette: return Magic.CLUT;
-            default: return null;
-        }
+        return getContentTagsForType(typeId)[0] || null;
     }
 
     async loadSharedPalettes(filePath) {

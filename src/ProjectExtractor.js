@@ -11,10 +11,10 @@ const fs = require('fs');
 const path = require('path');
 const DirectorFile = require('./DirectorFile');
 const CastMember = require('./CastMember');
-const DataStream = require('./utils/DataStream');
+const KeyTableParser = require('./utils/KeyTableParser');
 const { Palette } = require('./utils/Palette');
 const { Color } = require('./utils/Color');
-const { Magic, KeyTableValues } = require('./Constants');
+const { Magic } = require('./Constants');
 
 class ProjectExtractor {
     /**
@@ -108,23 +108,10 @@ class ProjectExtractor {
                 if (keyChunk) {
                     const keyData = await df.getChunkData(keyChunk);
                     if (keyData) {
-                        const ds = new DataStream(keyData, df.ds.endianness);
-                        let firstWord = ds.readUint16();
-                        if (firstWord === KeyTableValues.EndianMismatch || firstWord > 255) {
-                            ds.endianness = ds.endianness === 'big' ? 'little' : 'big';
-                            ds.seek(0);
-                            firstWord = ds.readUint16();
-                        }
-                        const headerSize = firstWord === KeyTableValues.HeaderShort ? 12 : 20;
-                        ds.seek(headerSize === 12 ? 8 : 16);
-                        const usedCount = ds.readUint32();
-                        ds.seek(headerSize);
-
-                        for (let i = 0; i < usedCount; i++) {
-                            if (ds.position + 12 > keyData.length) break;
-                            const sectionID = ds.readInt32();
-                            const castID = ds.readInt32();
-                            const tag = DirectorFile.unprotect(ds.readFourCC());
+                        const parsedKeyTable = KeyTableParser.parse(keyData, df.ds.endianness, this.log);
+                        const entries = parsedKeyTable ? parsedKeyTable.entries : [];
+                        for (const entry of entries) {
+                            const { sectionID, castID, tag } = entry;
                             if (!memberMap[castID]) memberMap[castID] = {};
                             memberMap[castID][tag] = sectionID;
                             this.memberToCastMap.set(castID, absolutePath);

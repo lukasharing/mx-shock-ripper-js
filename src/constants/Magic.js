@@ -52,6 +52,8 @@ module.exports = {
     DIB: 'DIB ',  // Device Independent Bitmap
     DIB_STAR: 'DIB*', // Alternate DIB
     PMBA: 'PMBA',  // Protected Abmp
+    ILBM: 'ILBM',  // Interleaved Bitmap
+    VCSH: 'VCSH',  // Vector Shape payload
     // Internal Map Tags
     imap: 'imap',
     mmap: 'mmap',

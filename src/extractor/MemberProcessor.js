@@ -3,6 +3,7 @@ const fs = require('fs');
 const { MemberType, Magic } = require('../Constants');
 const { Palette } = require('../utils/Palette');
 const { Color } = require('../utils/Color');
+const { getPreferredSectionId } = require('../utils/MemberContent');
 
 /**
  * @version 1.4.2
@@ -27,14 +28,9 @@ class MemberProcessor {
                 // Bitmap processing logic below
             }
 
-            const primaryTag = [
-                Magic.BITD, Magic.DIB, Magic.PIXL, 'Pixl', 'bitd', 'Abmp', 'PMBA',
-                Magic.STXT, Magic.TEXT, Magic.SND, Magic.FONT, Magic.VWFT,
-                Magic.CLUT, Magic.CVWS, Magic.XTRA, Magic.SCORE, Magic.VWSC
-            ].find(t => map && map[t]);
+            const chunkId = map ? (getPreferredSectionId(map, member.typeId) || Object.values(map)[0]) : 0;
 
-            if (primaryTag && map[primaryTag]) {
-                const chunkId = map[primaryTag];
+            if (chunkId) {
                 const dataChunk = this.extractor.dirFile.getChunkById(chunkId);
                 member.data = await this.extractor.dirFile.getChunkData(dataChunk);
             } else {
