@@ -7,10 +7,7 @@
         "mx-rip": "bin/mx-rip.js"
     },
     "scripts": {
-        "start": "node bin/mx-rip.js",
-        "test": "node test/regression/run.js --unit-only",
-        "test:regression": "node test/regression/run.js",
-        "test:fixtures": "node test/regression/run.js --fixtures-only"
+        "start": "node bin/mx-rip.js"
     },
     "keywords": [
         "director",
