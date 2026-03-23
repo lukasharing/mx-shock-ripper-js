@@ -31,6 +31,7 @@ Each entry in `members` can include:
 - `type`
 - `typeId`
 - `outcome`
+- `isOrphan`
 - `checksum`
 - `format`
 - `image`
@@ -44,6 +45,8 @@ Each entry in `members` can include:
 Artifact-reference fields are stored as filenames relative to the output directory. `image` is reserved for visual outputs, while text, sound, and generic payloads use their own fields instead of overloading `image`.
 
 `outcome` is the member's last extraction result, not just a status flag. It lets the manifest distinguish between successful artifact writes, incremental skips, placeholder-only sources, unresolved references, and unsupported payloads.
+
+`isOrphan` is `true` only when the member was discovered through orphan chunk association rather than through the normal KEY/CAST/LctX discovery path.
 
 ## Type-Specific Fields
 

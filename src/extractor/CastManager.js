@@ -179,7 +179,8 @@ class CastManager {
             if (!member && memberId > 0 && memberId < Limits.MaxCastSlots) {
                 member = new CastMember(memberId, null, {
                     name: `member_${memberId}`,
-                    typeId: detectedType || MemberType.Null
+                    typeId: detectedType || MemberType.Null,
+                    isOrphan: true
                 });
                 this.members.push(member);
                 this.memberMap.set(memberId, member);

@@ -481,6 +481,7 @@ class DirectorExtractor extends BaseExtractor {
                                 height: m.height,
                                 name: m.name,
                                 palette: m.palette,
+                                isOrphan: m.isOrphan,
                                 outcome: m.outcome,
                                 ...getArtifactSnapshot(m)
                             };
@@ -552,6 +553,7 @@ class DirectorExtractor extends BaseExtractor {
                             height: m.height,
                             name: m.name,
                             palette: m.palette,
+                            isOrphan: m.isOrphan,
                             outcome: m.outcome,
                             ...getArtifactSnapshot(m)
                         };

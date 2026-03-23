@@ -50,6 +50,7 @@ class CastMember {
         this.soundFile = properties.soundFile || null;
         this.dataFile = properties.dataFile || null;
         this.checksum = properties.checksum || null;
+        this.isOrphan = properties.isOrphan || false;
 
         // Shape specifics
         this.shapeType = properties.shapeType;
@@ -317,6 +318,7 @@ class CastMember {
             loaded: this.loaded, // If available
             checksum: this.checksum,
             outcome: this.outcome,
+            isOrphan: this.isOrphan,
             format: this.format,
             image: this.image,
             paletteFile: this.paletteFile,
