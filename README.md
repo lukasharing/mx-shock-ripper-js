@@ -1,5 +1,5 @@
 # mx-shock-ripper-js
-![Version](https://img.shields.io/badge/version-1.5.4-blue)
+![Version](https://img.shields.io/badge/version-1.5.5-blue)
 ![Build](https://img.shields.io/badge/build-stable-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -26,7 +26,7 @@ npm install mx-shock-ripper-js
 ## CLI Usage
 
 ```text
-mx-shock-ripper-js - Production Grade Director Asset Ripper v1.5.4
+mx-shock-ripper-js - Production Grade Director Asset Ripper v1.5.5
 
 Usage:
   mx-rip <input_file> [output_dir] [options]
@@ -92,7 +92,7 @@ Typical outputs include:
 - `castlibs.json`: linked cast metadata for movie projects.
 - `<input>_extraction.log`: extractor run log. Normal mode keeps it summarized; `--verbose` adds detailed worker diagnostics.
 
-Per-member artifact references are stored in `members.json` under `image`, `paletteFile`, and `scriptFile`. Each member may also carry an `outcome` such as `extracted`, `unchanged`, `placeholder_source`, or `unsupported_content`.
+Per-member artifact references are stored in `members.json` under type-appropriate fields such as `image`, `scriptFile`, `paletteFile`, `textFile`, `soundFile`, and `dataFile`. Each member may also carry an `outcome` such as `extracted`, `unchanged`, `placeholder_source`, or `unsupported_content`.
 
 ## Current Limitations
 

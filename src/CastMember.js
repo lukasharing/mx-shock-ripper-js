@@ -8,6 +8,7 @@ const { MemberType, Offsets } = require('./Constants');
 const Specs = require('./member/MemberSpec');
 const DirectorFile = require('./DirectorFile');
 const { Palette } = require('./utils/Palette');
+const { ARTIFACT_FIELDS } = require('./utils/ArtifactFields');
 
 class CastMember {
     constructor(id, chunk, properties = {}) {
@@ -41,10 +42,13 @@ class CastMember {
         // Internal Tracking Properties (Post-Processed)
         this.width = properties.width || 0;
         this.height = properties.height || 0;
-        this.scriptFile = null;
+        this.scriptFile = properties.scriptFile || null;
         this.image = properties.image || null;
         this.palette = properties.palette || null;
         this.paletteFile = properties.paletteFile || null;
+        this.textFile = properties.textFile || null;
+        this.soundFile = properties.soundFile || null;
+        this.dataFile = properties.dataFile || null;
         this.checksum = properties.checksum || null;
 
         // Shape specifics
@@ -316,13 +320,20 @@ class CastMember {
             format: this.format,
             image: this.image,
             paletteFile: this.paletteFile,
-            scriptFile: this.scriptFile
+            scriptFile: this.scriptFile,
+            textFile: this.textFile,
+            soundFile: this.soundFile,
+            dataFile: this.dataFile
         };
 
         // Filter out null/undefined common fields
         const result = Object.fromEntries(
             Object.entries(common).filter(([_, v]) => v !== undefined && v !== null && v !== '')
         );
+
+        for (const field of ARTIFACT_FIELDS) {
+            if (result[field] === null) delete result[field];
+        }
 
         if (this.palette && !Array.isArray(this.palette) && typeof this.palette === 'object') {
             result.palette = this.palette;

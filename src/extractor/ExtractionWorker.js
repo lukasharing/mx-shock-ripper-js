@@ -24,12 +24,16 @@ const { getPreferredSectionId } = require('../utils/MemberContent');
  * Uses shared FD and metadata to perform autonomous Disk I/O.
  */
 
-const { fd, keyTable, nameTable, chunks, fmap, lctxMap, options: workerOptions, isAfterburned, ilsBodyOffset, ilsBody } = workerData;
+const { fd, keyTable, nameTable, chunks, fmap, lctxMap, options: workerOptions, isAfterburned, ilsBody } = workerData;
 
 
 const logProxy = (lvl, msg, memberId) => {
     parentPort.postMessage({ type: 'LOG', level: lvl, message: msg, memberId });
 };
+
+const ilsBodyView = ilsBody
+    ? (Buffer.isBuffer(ilsBody) ? ilsBody : Buffer.from(ilsBody))
+    : null;
 
 // Autonomous data accessor mirroring DirectorFile's canonical direct-id lookup.
 // Later chunks (for example ABMP entries) overwrite earlier placeholders for the
@@ -46,28 +50,38 @@ const postSkip = (id, reason) => {
     parentPort.postMessage({ type: 'SKIP', id, reason });
 };
 
-const getChunkData = async (chunk) => {
+const getStoredChunkData = async (chunk) => {
     if (!isReadableChunk(chunk)) return null;
     try {
         const physicalOffset = chunk.physicalOffset;
-        let buf;
-
-        if (isAfterburned && chunk.isIlsResident && ilsBody) {
+        if (isAfterburned && chunk.isIlsResident && ilsBodyView) {
             const start = chunk.off;
             const end = start + chunk.len;
-            if (start < 0 || end > ilsBody.length) {
-                logProxy('ERROR', `Chunk ${chunk.id} ILS range [${start},${end}) out of bounds (ilsBody=${ilsBody.length})`);
+            if (start < 0 || end > ilsBodyView.length) {
+                logProxy('ERROR', `Chunk ${chunk.id} ILS range [${start},${end}) out of bounds (ilsBody=${ilsBodyView.length})`);
                 return null;
             }
-            buf = ilsBody.slice(start, end);
-        } else {
-            buf = Buffer.allocUnsafe(chunk.len);
-            const bytesRead = fs.readSync(fd, buf, 0, chunk.len, physicalOffset);
-            if (bytesRead < chunk.len) {
-                logProxy('WARN', `Truncated read for chunk ${chunk.id}: expected ${chunk.len}, got ${bytesRead}`);
-                buf.fill(0, bytesRead);
-            }
+            return ilsBodyView.slice(start, end);
         }
+
+        const buf = Buffer.allocUnsafe(chunk.len);
+        const bytesRead = fs.readSync(fd, buf, 0, chunk.len, physicalOffset);
+        if (bytesRead < chunk.len) {
+            logProxy('WARN', `Truncated read for chunk ${chunk.id}: expected ${chunk.len}, got ${bytesRead}`);
+            buf.fill(0, bytesRead);
+        }
+        return buf;
+    } catch (e) {
+        logProxy('ERROR', `Failed to read chunk ${chunk.id}: ${e.message}`);
+        return null;
+    }
+};
+
+const getChunkData = async (chunk, raw = null) => {
+    if (!isReadableChunk(chunk)) return null;
+    try {
+        let buf = raw || await getStoredChunkData(chunk);
+        if (!buf) return null;
 
         // Decompression: try standard inflate -> raw inflate -> scan for 0x78 (prefix-friendly)
         const isZlib = buf.length >= 2 && buf[0] === 0x78 && (buf[1] === 0x01 || buf[1] === 0x9c || buf[1] === 0xda);
@@ -168,7 +182,7 @@ const lingoDecompiler = new LingoDecompiler(logProxy, mockExtractor);
 
 
 parentPort.on('message', async (task) => {
-    const { member, outPathPrefix, palette, knownChecksum, scriptChunkId } = task;
+    const { member, outPathPrefix, palette, knownChecksum, knownCacheChecksum, scriptChunkId } = task;
     const memberId = member.id;
 
     try {
@@ -180,6 +194,56 @@ parentPort.on('message', async (task) => {
         }
 
         const sectionId = (map && (getPreferredSectionId(map, member.typeId) || Object.values(map)[0])) || 0;
+        const typeId = member.typeId;
+        const primaryChunkId = (typeId === MemberType.Script)
+            ? (scriptChunkId || sectionId || 0)
+            : sectionId;
+
+        let primaryChunk = null;
+        let primaryRawData = null;
+        let cacheChecksum = '';
+
+        if (primaryChunkId > 0) {
+            primaryChunk = getChunkById(primaryChunkId);
+            if (!primaryChunk) {
+                postSkip(memberId, 'unresolved_reference');
+                return;
+            }
+            if (!isReadableChunk(primaryChunk)) {
+                postSkip(memberId, 'placeholder_source');
+                return;
+            }
+            primaryRawData = await getStoredChunkData(primaryChunk);
+            if (!primaryRawData) {
+                postSkip(memberId, 'unresolved_reference');
+                return;
+            }
+            if (!workerOptions.skipChecksum) {
+                const cacheHash = crypto.createHash('sha256');
+                cacheHash.update(primaryRawData);
+                cacheChecksum = cacheHash.digest('hex');
+            }
+        }
+
+        if (knownCacheChecksum && cacheChecksum && knownCacheChecksum === cacheChecksum && !workerOptions.force) {
+            let renamed;
+            if ((typeId === MemberType.Text || typeId === MemberType.Field) && primaryChunk) {
+                const currentData = await getChunkData(primaryChunk, primaryRawData);
+                if (currentData) {
+                    const rawText = textExtractor.extract(currentData, { useRaw: true, chunkId: primaryChunkId });
+                    renamed = textExtractor.inferSemanticName(rawText, member) || undefined;
+                }
+            }
+            parentPort.postMessage({
+                type: 'SKIP',
+                id: memberId,
+                reason: 'unchanged',
+                checksum: knownChecksum || null,
+                cacheChecksum: cacheChecksum || knownCacheChecksum || null,
+                renamed
+            });
+            return;
+        }
 
         let data = null;
         if (sectionId > 0) {
@@ -192,7 +256,7 @@ parentPort.on('message', async (task) => {
                 postSkip(memberId, 'placeholder_source');
                 return;
             }
-            data = await getChunkData(chunk);
+            data = await getChunkData(chunk, chunk.id === primaryChunkId ? primaryRawData : null);
             if (!data) {
                 postSkip(memberId, 'unresolved_reference');
                 return;
@@ -209,15 +273,7 @@ parentPort.on('message', async (task) => {
                 contentHash = hash.digest('hex');
             }
         }
-
-
-        if (knownChecksum && contentHash === knownChecksum && !workerOptions.force) {
-            postSkip(memberId, 'unchanged');
-            return;
-        }
-
         let result = null;
-        const typeId = member.typeId;
 
         if (typeId === MemberType.Bitmap) {
             let alphaData = null;
@@ -246,11 +302,16 @@ parentPort.on('message', async (task) => {
             if (lscrId && (!scriptData || lscrId !== sectionId)) {
                 const lscrChunk = getChunkById(lscrId);
                 if (isReadableChunk(lscrChunk)) {
-                    scriptData = await getChunkData(lscrChunk);
+                    scriptData = await getChunkData(lscrChunk, lscrId === primaryChunkId ? primaryRawData : null);
                 }
             }
 
             if (scriptData) scriptData = Buffer.from(scriptData);
+            if (!contentHash && scriptData && !workerOptions.skipChecksum) {
+                const hash = crypto.createHash('sha256');
+                hash.update(scriptData);
+                contentHash = hash.digest('hex');
+            }
 
 
             const resolvedNameTable = task.nameTable || nameTable;
@@ -298,12 +359,10 @@ parentPort.on('message', async (task) => {
                     fs.writeFileSync(lasmPath, decompiled.lasm);
                 }
 
-                const checksum = crypto.createHash('sha256').update(source).digest('hex');
                 result = {
                     format: Resources.Formats.LS,
                     file: path.basename(outPath),
                     path: outPath,
-                    checksum,
                     renamed: wasRenamed ? finalName : undefined
                 };
             }
@@ -329,9 +388,10 @@ parentPort.on('message', async (task) => {
         parentPort.postMessage({
             type: 'DONE',
             id: memberId,
-            checksum: contentHash || result?.checksum || null,
+            checksum: contentHash || null,
+            cacheChecksum: cacheChecksum || null,
             format: result?.format,
-            scriptFile: result?.file || result?.path,
+            artifactFile: result?.file || result?.path,
             width: result?.width,
             height: result?.height,
             renamed: result?.renamed,

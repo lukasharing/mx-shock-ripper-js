@@ -37,8 +37,11 @@ Each entry in `members` can include:
 - `palette`
 - `paletteFile`
 - `scriptFile`
+- `textFile`
+- `soundFile`
+- `dataFile`
 
-Artifact-reference fields are stored as filenames relative to the output directory.
+Artifact-reference fields are stored as filenames relative to the output directory. `image` is reserved for visual outputs, while text, sound, and generic payloads use their own fields instead of overloading `image`.
 
 `outcome` is the member's last extraction result, not just a status flag. It lets the manifest distinguish between successful artifact writes, incremental skips, placeholder-only sources, unresolved references, and unsupported payloads.
 
@@ -49,7 +52,9 @@ Examples of additional per-type fields:
 - bitmaps: `width`, `height`, `regPoint`, `bitDepth`, `paletteId`, `clutCastLib`, `palette`
 - scripts: `scriptType`
 - shapes: `rect`, `pattern`, `foreColor`, `backColor`, `lineSize`
-- text/fields: text/style metadata when available
+- text/fields: `textFile`, text/style metadata when available
+- sounds: `soundFile`
+- generic/font/movie/xtra/video-style outputs: `dataFile`
 
 For visual indexed members, `palette` stores resolved palette metadata such as the real source member/system palette, not the temporary greyscale export/render override used when `--colored` is disabled.
 
@@ -113,4 +118,4 @@ If `members.json` already exists and `--force` is not used:
 3. unchanged members are reported as `SKIP`
 4. previous artifact metadata is restored into the new manifest
 
-This keeps `image`, `paletteFile`, `scriptFile`, `width`, `height`, and `format` stable across reruns when the source content has not changed.
+This keeps `image`, `scriptFile`, `paletteFile`, `textFile`, `soundFile`, `dataFile`, `width`, `height`, and `format` stable across reruns when the source content has not changed.

@@ -4,6 +4,7 @@ const { MemberType, Magic } = require('../Constants');
 const { Palette } = require('../utils/Palette');
 const { Color } = require('../utils/Color');
 const { getPreferredSectionId } = require('../utils/MemberContent');
+const { assignArtifactToMember } = require('../utils/ArtifactFields');
 
 /**
  * @version 1.4.2
@@ -118,7 +119,8 @@ class MemberProcessor {
 
             // 4. Capture extraction results for metadata serialization
             if (result) {
-                member.image = result.file || result.path; // Canonical property for frontend asset loading
+                if (result.renamed) member.name = result.renamed;
+                assignArtifactToMember(member, result.file || result.path);
                 member.format = result.format;
                 if (result.width) member.width = result.width;
                 if (result.height) member.height = result.height;

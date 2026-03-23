@@ -39,7 +39,15 @@ const DataStream = require('./utils/DataStream');
 const { MemberType, Magic, Resources } = require('./Constants');
 const { Palette } = require('./utils/Palette');
 const Logger = require('./utils/Logger');
-const { buildScriptArtifactStem } = require('./utils/ArtifactNames');
+const { buildScriptArtifactStem, sanitizeArtifactStem } = require('./utils/ArtifactNames');
+const {
+    ARTIFACT_FIELDS,
+    assignArtifactToMember,
+    getArtifactSnapshot,
+    hasArtifact,
+    migrateLegacyArtifactRecord,
+    restoreArtifactsToMember
+} = require('./utils/ArtifactFields');
 const { getContentTagsForType, getMatchingTagsForType, getPreferredSectionId } = require('./utils/MemberContent');
 
 class DirectorExtractor extends BaseExtractor {
@@ -335,6 +343,7 @@ class DirectorExtractor extends BaseExtractor {
         this.stats.selected = this.buildStatsBucket(processQueue);
 
         const currentMembersJSON = path.join(this.outputDir, 'members.json');
+        const currentMembersCacheJSON = path.join(this.outputDir, '.members.cache.json');
         const workers = [];
         const taskQueue = [...processQueue];
         let remaining = processQueue.length;
@@ -360,10 +369,13 @@ class DirectorExtractor extends BaseExtractor {
 
         let ilsBody = null;
         if (this.dirFile.isAfterburned) {
-            ilsBody = this.dirFile._ilsBody || null;
+            ilsBody = this.dirFile._ilsBodyShared || null;
             if (!ilsBody) {
                 const ilsChunk = this.dirFile.getChunksByType('ILS ')[0] || this.dirFile.getChunkById(2);
-                if (ilsChunk) ilsBody = await this.dirFile.getChunkData(ilsChunk);
+                if (ilsChunk) {
+                    await this.dirFile.loadInlineStream(ilsChunk);
+                    ilsBody = this.dirFile._ilsBodyShared || null;
+                }
             }
         }
 
@@ -380,7 +392,6 @@ class DirectorExtractor extends BaseExtractor {
                     movieConfig: this.metadataManager.movieConfig || {},
                     resToMember: this.metadataManager.resToMember || {},
                     isAfterburned: this.dirFile.isAfterburned,
-                    ilsBodyOffset: this.dirFile.ilsBodyOffset,
                     ilsBody: ilsBody,
                     options: {
                         verbose: this.options.verbose,
@@ -403,13 +414,31 @@ class DirectorExtractor extends BaseExtractor {
                         typeof value === 'string' && value.length > 0 ? path.basename(value) : value
                     );
                     for (const m of prevData.members) {
-                        this.metadataStore[m.id] = {
-                            ...m,
-                            image: normalizeArtifactRef(m.image),
-                            paletteFile: normalizeArtifactRef(m.paletteFile),
-                            scriptFile: normalizeArtifactRef(m.scriptFile)
-                        };
+                        const normalized = { ...m };
+                        for (const field of ARTIFACT_FIELDS) {
+                            normalized[field] = normalizeArtifactRef(m[field]);
+                        }
+                        this.metadataStore[m.id] = migrateLegacyArtifactRecord(normalized);
                     }
+                }
+            } catch (e) {
+
+            }
+        }
+        if (fs.existsSync(currentMembersCacheJSON)) {
+            try {
+                const prevCacheData = JSON.parse(fs.readFileSync(currentMembersCacheJSON, 'utf8'));
+                const cacheMembers = Array.isArray(prevCacheData?.members)
+                    ? prevCacheData.members
+                    : [];
+                for (const entry of cacheMembers) {
+                    if (!entry || !Number.isInteger(entry.id)) continue;
+                    this.metadataStore[entry.id] = {
+                        ...(this.metadataStore[entry.id] || {}),
+                        cacheChecksum: typeof entry.cacheChecksum === 'string' && entry.cacheChecksum.length > 0
+                            ? entry.cacheChecksum
+                            : null
+                    };
                 }
             } catch (e) {
 
@@ -433,11 +462,10 @@ class DirectorExtractor extends BaseExtractor {
                     const m = this.members.find(mem => mem.id === msg.id);
                     const reason = msg.reason || (msg.format ? 'extracted' : 'unsupported_content');
                     if (m) {
+                        const prevMeta = this.metadataStore[m.id] || {};
                         if (msg.renamed) m.name = msg.renamed;
                         m.checksum = msg.checksum;
-                        if (m.typeId === MemberType.Script) m.scriptFile = msg.scriptFile;
-                        else if (m.typeId === MemberType.Palette) m.paletteFile = msg.scriptFile;
-                        else if (msg.scriptFile) m.image = msg.scriptFile;
+                        assignArtifactToMember(m, msg.artifactFile);
                         m.width = msg.width;
                         m.height = msg.height;
                         m.format = msg.format;
@@ -445,16 +473,16 @@ class DirectorExtractor extends BaseExtractor {
 
                         if (this.metadataStore) {
                             this.metadataStore[m.id] = {
+                                ...prevMeta,
                                 checksum: m.checksum,
+                                cacheChecksum: msg.cacheChecksum || prevMeta.cacheChecksum || null,
                                 format: m.format,
-                                image: m.image,
-                                paletteFile: m.paletteFile,
-                                scriptFile: m.scriptFile,
                                 width: m.width,
                                 height: m.height,
                                 name: m.name,
                                 palette: m.palette,
-                                outcome: m.outcome
+                                outcome: m.outcome,
+                                ...getArtifactSnapshot(m)
                             };
                         }
                     }
@@ -479,16 +507,34 @@ class DirectorExtractor extends BaseExtractor {
                     this.logProgress(completedTasks, processQueue.length, remaining);
                 } else if (msg.type === 'SKIP') {
                     const m = this.members.find(mem => mem.id === msg.id);
-                    const prev = this.metadataStore[msg.id];
+                    const prev = this.metadataStore[msg.id] || {};
                     const reason = msg.reason || 'unchanged';
                     if (m && prev) {
-                        if (prev.name) m.name = prev.name;
+                        if (msg.renamed) m.name = msg.renamed;
+                        else if (prev.name) m.name = prev.name;
                         if (msg.checksum) m.checksum = msg.checksum;
                         else if (prev.checksum) m.checksum = prev.checksum;
                         if (prev.format) m.format = prev.format;
-                        if (prev.image) m.image = prev.image;
-                        if (prev.paletteFile) m.paletteFile = prev.paletteFile;
-                        if (prev.scriptFile) m.scriptFile = prev.scriptFile;
+                        restoreArtifactsToMember(m, prev);
+                        if (msg.renamed && (m.typeId === MemberType.Text || m.typeId === MemberType.Field) && m.textFile) {
+                            const oldFile = m.textFile;
+                            const parsed = path.parse(oldFile);
+                            const newFile = `${sanitizeArtifactStem(msg.renamed, parsed.name)}${parsed.ext}`;
+                            if (newFile !== oldFile) {
+                                const oldPath = path.join(this.outputDir, oldFile);
+                                const newPath = path.join(this.outputDir, newFile);
+                                try {
+                                    if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
+                                        fs.renameSync(oldPath, newPath);
+                                    }
+                                    if (fs.existsSync(newPath)) {
+                                        m.textFile = newFile;
+                                    }
+                                } catch (e) {
+                                    this.log('WARNING', `Failed to rename preserved text artifact ${oldFile} -> ${newFile}: ${e.message}`);
+                                }
+                            }
+                        }
                         if (prev.width) m.width = prev.width;
                         if (prev.height) m.height = prev.height;
                         if (!m.palette && prev.palette) m.palette = prev.palette;
@@ -498,17 +544,16 @@ class DirectorExtractor extends BaseExtractor {
                     this.recordOutcome(m, reason);
                     if (m && this.metadataStore) {
                         this.metadataStore[m.id] = {
-                            ...(this.metadataStore[m.id] || {}),
+                            ...prev,
                             checksum: m.checksum,
+                            cacheChecksum: msg.cacheChecksum || prev.cacheChecksum || null,
                             format: m.format,
-                            image: m.image,
-                            paletteFile: m.paletteFile,
-                            scriptFile: m.scriptFile,
                             width: m.width,
                             height: m.height,
                             name: m.name,
                             palette: m.palette,
-                            outcome: m.outcome
+                            outcome: m.outcome,
+                            ...getArtifactSnapshot(m)
                         };
                     }
                     completedTasks++;
@@ -543,6 +588,18 @@ class DirectorExtractor extends BaseExtractor {
 
             const sendTask = async (worker, member) => {
                 const outPathPrefix = path.join(this.outputDir, (member.name || `member_${member.id}`).replace(/[/\\?%*:|"<>]/g, '_'));
+                const prevMeta = this.metadataStore[member.id] || null;
+                const prevArtifacts = prevMeta
+                    ? ARTIFACT_FIELDS
+                        .map((field) => prevMeta[field])
+                        .filter((value) => typeof value === 'string' && value.length > 0)
+                    : [];
+                const canReusePrevious = !!(
+                    prevMeta &&
+                    prevMeta.checksum &&
+                    prevArtifacts.length > 0 &&
+                    prevArtifacts.every((file) => fs.existsSync(path.join(this.outputDir, file)))
+                );
 
                 let scriptChunkId = null;
                 if (member.typeId === MemberType.Script) {
@@ -577,7 +634,8 @@ class DirectorExtractor extends BaseExtractor {
                         rect: member.rect
                     },
                         outPathPrefix,
-                        knownChecksum: this.metadataStore[member.id]?.checksum,
+                        knownChecksum: canReusePrevious ? prevMeta.checksum : null,
+                        knownCacheChecksum: canReusePrevious ? prevMeta.cacheChecksum : null,
                         palette: member._resolvedPalette,
                         scriptChunkId,
                         nameTable: (member.typeId === MemberType.Script)
@@ -623,7 +681,7 @@ class DirectorExtractor extends BaseExtractor {
                 ? !!this.options.palette
                 : this.shouldExtractMemberType(member.typeId);
             if (!shouldAssignFormat) continue;
-            const hasOutput = !!(member.scriptFile || member.paletteFile || member.image);
+            const hasOutput = hasArtifact(member);
             if (!hasOutput) continue;
 
             if (!member.format) {
@@ -651,6 +709,17 @@ class DirectorExtractor extends BaseExtractor {
         this.metadata.members = finalMembers.map(m => m.toJSON());
 
         this.saveJSON();
+        try {
+            const cacheMembers = finalMembers
+                .map((m) => ({
+                    id: m.id,
+                    cacheChecksum: this.metadataStore[m.id]?.cacheChecksum || null
+                }))
+                .filter((m) => !!m.cacheChecksum);
+            fs.writeFileSync(currentMembersCacheJSON, JSON.stringify({ version: 1, members: cacheMembers }, null, 2));
+        } catch (e) {
+            this.log('WARNING', `Failed to save internal cache metadata: ${e.message}`);
+        }
         this.saveLog();
 
         if (this.dirFile) this.dirFile.close();

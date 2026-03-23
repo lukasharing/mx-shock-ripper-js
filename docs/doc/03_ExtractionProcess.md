@@ -91,4 +91,4 @@ After worker completion, `DirectorExtractor`:
 - writes `movie.json`, `timeline.json`, and `castlibs.json` when available
 - writes `<input>_extraction.log`
 
-The `members.json` file stores per-member artifact references under `image`, `paletteFile`, and `scriptFile`.
+The `members.json` file stores per-member artifact references under type-appropriate fields such as `image`, `scriptFile`, `paletteFile`, `textFile`, `soundFile`, and `dataFile`.

@@ -31,6 +31,7 @@ class DirectorFile {
         this.isAfterburned = false;
         this.ilsBodyOffset = 0;
         this._ilsBody = null;
+        this._ilsBodyShared = null;
         this.format = 'unknown';
         this.fmap = null;
         this.subtype = null;
@@ -361,7 +362,8 @@ class DirectorFile {
             this.log('ERROR', `loadInlineStream: Failed to decompress ILS chunk data.`);
             return;
         }
-        this._ilsBody = Buffer.from(decomp);
+        this._setIlsBody(decomp);
+        this.cachedViews[ilsInfo.id] = this._ilsBody;
         
         const ds = new DataStream(this._ilsBody, this.ds.endianness);
         
@@ -374,8 +376,7 @@ class DirectorFile {
                 chunk.off = ds.position;
                 
                 if (ds.position + chunk.len <= ds.length) {
-                    // this.cachedViews[resId] = ds.readBytes(chunk.len);
-                    this.cachedViews[resId] = Buffer.from(ds.readBytes(chunk.len));
+                    ds.skip(chunk.len);
                     loadedCount++;
                 } else {
                     this.log('WARNING', `loadInlineStream: Chunk ${resId} (${chunk.type}) overflows ILS buffer. len=${chunk.len} remaining=${ds.length - ds.position}`);
@@ -386,6 +387,27 @@ class DirectorFile {
                 break; 
             }
         }
+    }
+
+    _setIlsBody(body) {
+        if (!body) {
+            this._ilsBody = null;
+            this._ilsBodyShared = null;
+            return;
+        }
+
+        if (Buffer.isBuffer(body) && body.buffer instanceof SharedArrayBuffer) {
+            this._ilsBody = body;
+            this._ilsBodyShared = body.buffer;
+            return;
+        }
+
+        const source = Buffer.isBuffer(body) ? body : Buffer.from(body);
+        const shared = new SharedArrayBuffer(source.length);
+        const sharedView = Buffer.from(shared);
+        source.copy(sharedView);
+        this._ilsBody = sharedView;
+        this._ilsBodyShared = shared;
     }
 
     async getChunkData(chunk) {
