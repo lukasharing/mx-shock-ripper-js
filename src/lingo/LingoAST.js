@@ -109,6 +109,86 @@ class PropertyReference extends Node {
     buildString(arr) { arr.push(this.name); }
 }
 
+class TheExpression extends Node {
+    constructor(name) {
+        super();
+        this.name = name;
+    }
+
+    buildString(arr) {
+        arr.push("the ");
+        arr.push(this.name);
+    }
+}
+
+class ObjectPropertyExpression extends Node {
+    constructor(object, property) {
+        super();
+        this.object = object;
+        this.property = property;
+    }
+
+    buildString(arr) {
+        arr.push("the ");
+        arr.push(this.property);
+        arr.push(" of ");
+
+        const needsParens = this.object instanceof BinaryOperator
+            || this.object instanceof LogicalOperator
+            || this.object instanceof CallStatement
+            || this.object instanceof ObjCallStatement;
+        if (needsParens) arr.push("(");
+        if (this.object) this.object.buildString(arr);
+        if (needsParens) arr.push(")");
+    }
+}
+
+class LastChunkExpression extends Node {
+    constructor(type, object) {
+        super();
+        this.type = type;
+        this.object = object;
+    }
+
+    buildString(arr) {
+        const types = { 1: "char", 2: "word", 3: "item", 4: "line" };
+        arr.push("the last ");
+        arr.push(types[this.type] || "chunk");
+        arr.push(" in ");
+
+        const needsParens = this.object instanceof BinaryOperator
+            || this.object instanceof LogicalOperator
+            || this.object instanceof CallStatement
+            || this.object instanceof ObjCallStatement;
+        if (needsParens) arr.push("(");
+        if (this.object) this.object.buildString(arr);
+        if (needsParens) arr.push(")");
+    }
+}
+
+class ChunkCountExpression extends Node {
+    constructor(type, object) {
+        super();
+        this.type = type;
+        this.object = object;
+    }
+
+    buildString(arr) {
+        const plural = { 1: "chars", 2: "words", 3: "items", 4: "lines" };
+        arr.push("the number of ");
+        arr.push(plural[this.type] || "chunks");
+        arr.push(" in ");
+
+        const needsParens = this.object instanceof BinaryOperator
+            || this.object instanceof LogicalOperator
+            || this.object instanceof CallStatement
+            || this.object instanceof ObjCallStatement;
+        if (needsParens) arr.push("(");
+        if (this.object) this.object.buildString(arr);
+        if (needsParens) arr.push(")");
+    }
+}
+
 /**
  * Local variable reference (l_1, l_2, etc or named locals)
  */
@@ -208,6 +288,32 @@ class AssignmentStatement extends Node {
     }
 }
 
+class PutStatement extends Node {
+    constructor(type, variable, value) {
+        super();
+        this.type = type;
+        this.variable = variable;
+        this.value = value;
+        this.isStatement = true;
+    }
+
+    buildString(arr, indent = "") {
+        const putTypes = {
+            0x01: 'into',
+            0x02: 'after',
+            0x03: 'before'
+        };
+
+        arr.push(indent);
+        arr.push("put ");
+        this.value.buildString(arr);
+        arr.push(" ");
+        arr.push(putTypes[this.type] || 'into');
+        arr.push(" ");
+        this.variable.buildString(arr);
+    }
+}
+
 /**
  * Standard command or function call: name(args)
  */
@@ -240,7 +346,13 @@ class ObjCallStatement extends Node {
     constructor(target, method, args) { super(); this.target = target; this.method = method; this.args = args; }
     buildString(arr, indent = "") {
         arr.push(indent);
+        const needsParens = this.target instanceof BinaryOperator
+            || this.target instanceof LogicalOperator
+            || this.target instanceof TheExpression
+            || this.target instanceof ObjectPropertyExpression;
+        if (needsParens) arr.push("(");
         this.target.buildString(arr);
+        if (needsParens) arr.push(")");
         arr.push(".");
         arr.push(this.method);
         arr.push("(");
@@ -265,7 +377,10 @@ class ObjCallStatement extends Node {
 class BinaryOperator extends Node {
     constructor(op, left, right) { super(); this.op = op; this.left = left; this.right = right; }
     buildString(arr) {
-        const leftNeedsParens = (this.left instanceof BinaryOperator || this.left instanceof LogicalOperator);
+        const leftNeedsParens = (this.left instanceof BinaryOperator
+            || this.left instanceof LogicalOperator
+            || this.left instanceof TheExpression
+            || this.left instanceof ObjectPropertyExpression);
         const rightNeedsParens = (this.right instanceof BinaryOperator || this.right instanceof LogicalOperator);
 
         if (this.op === '.') {
@@ -297,6 +412,20 @@ class BinaryOperator extends Node {
         if (rightNeedsParens) arr.push("(");
         if (this.right) this.right.buildString(arr);
         if (rightNeedsParens) arr.push(")");
+    }
+}
+
+class RangeExpression extends Node {
+    constructor(start, end) {
+        super();
+        this.start = start;
+        this.end = end;
+    }
+
+    buildString(arr) {
+        if (this.start) this.start.buildString(arr);
+        arr.push("..");
+        if (this.end) this.end.buildString(arr);
     }
 }
 
@@ -432,7 +561,33 @@ class RepeatWithStatement extends Node {
     }
     buildString(arr, indent = "") {
         arr.push(indent);
-        arr.push(`repeat with ${this.it} = ${this.start} ${this.down ? "down to" : "to"} ${this.end}\n`);
+        arr.push("repeat with ");
+        arr.push(this.it);
+        arr.push(" = ");
+        if (this.start) this.start.buildString(arr);
+        arr.push(this.down ? " down to " : " to ");
+        if (this.end) this.end.buildString(arr);
+        arr.push("\n");
+        this.block.buildString(arr, indent + "  ");
+        arr.push(indent); arr.push("end repeat");
+    }
+}
+
+class RepeatWithInStatement extends Node {
+    constructor(it, list) {
+        super();
+        this.it = it;
+        this.list = list;
+        this.block = new Block(this);
+        this.isStatement = true;
+    }
+    buildString(arr, indent = "") {
+        arr.push(indent);
+        arr.push("repeat with ");
+        arr.push(this.it);
+        arr.push(" in ");
+        if (this.list) this.list.buildString(arr);
+        arr.push("\n");
         this.block.buildString(arr, indent + "  ");
         arr.push(indent); arr.push("end repeat");
     }
@@ -534,11 +689,10 @@ class ChunkExpression extends Node {
         arr.push(types[this.type] || "chunk");
         arr.push(" ");
 
-        const s = this.start.toString();
-        const e = this.end.toString();
+        const endIsZero = this.end instanceof Literal && this.end.value === 0;
 
         if (this.start) this.start.buildString(arr);
-        if (s !== e) {
+        if (!endIsZero) {
             arr.push(" to ");
             if (this.end) this.end.buildString(arr);
         }
@@ -562,11 +716,12 @@ module.exports = {
     setLogger(logger) {
         astLogger = (typeof logger === 'function') ? logger : null;
     },
-    Node, Block, Handler, VarReference, PropertyReference, LocalVarReference, ParamReference,
+    Node, Block, Handler, VarReference, PropertyReference, TheExpression, ObjectPropertyExpression, LastChunkExpression, ChunkCountExpression, LocalVarReference, ParamReference,
     Literal, IntLiteral, FloatLiteral, StringLiteral, SymbolLiteral,
-    ListLiteral, PropListLiteral, ArgListLiteral, AssignmentStatement,
+    ListLiteral, PropListLiteral, ArgListLiteral, AssignmentStatement, PutStatement,
     CallStatement, ObjCallStatement, BinaryOperator, LogicalOperator,
+    RangeExpression,
     NotOperator, InverseOperator, IfStatement, CaseStatement, CaseBranch,
-    RepeatWithStatement, RepeatWhileStatement,
+    RepeatWithStatement, RepeatWithInStatement, RepeatWhileStatement,
     ReturnStatement, ExitStatement, ExitRepeatStatement, TryStatement, MemberExpression, ChunkExpression, ERROR
 };

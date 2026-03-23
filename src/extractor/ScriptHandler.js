@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { MemberType, Magic, AfterburnerTags, LingoConfig, Resources } = require('../Constants');
+const { buildScriptArtifactStem } = require('../utils/ArtifactNames');
 
 class ScriptHandler {
     constructor(extractor) {
@@ -82,13 +83,9 @@ class ScriptHandler {
         let source = null;
 
 
-        if (member.scriptId > 0 && this.extractor.metadataManager.lctxMap[member.scriptId]) {
-            lscrId = this.extractor.metadataManager.lctxMap[member.scriptId];
-
-            source = 'Lscr (LctX)';
-        } else if (member.id > 0 && this.extractor.metadataManager.lctxMap[member.id]) {
-            lscrId = this.extractor.metadataManager.lctxMap[member.id];
-
+        const resolvedScriptId = this.extractor.metadataManager.resolveScriptSectionId(member);
+        if (resolvedScriptId) {
+            lscrId = resolvedScriptId;
             source = 'Lscr (LctX)';
         }
 
@@ -114,8 +111,7 @@ class ScriptHandler {
 
         this.extractor.log('INFO', `Member ID ${member.id}: Decompiling Bytecode from ${source}...`);
 
-        const idx = this.extractor.dirFile.chunks.indexOf(chunk);
-        const names = this.extractor.metadataManager.getNameTableForScript(idx);
+        const names = this.extractor.metadataManager.getNameTableForScript(lscrId);
 
         const decompiled = this.extractor.lingoDecompiler.decompile(lscrData, names, member.scriptType, member.id, { lasm: this.extractor.options.lasm });
         const decompiledText = (typeof decompiled === 'object') ? decompiled.text || decompiled.source : decompiled;
@@ -127,12 +123,13 @@ class ScriptHandler {
         }
 
         if (decompiledText) {
-            const lsPath = path.join(this.extractor.outputDir, `${member.name}.ls`);
+            const fileStem = buildScriptArtifactStem(member.name, member.id, member.scriptType || 0);
+            const lsPath = path.join(this.extractor.outputDir, `${fileStem}.ls`);
             this.extractor.scriptExtractor.save(decompiledText, lsPath, member);
 
             // Save LASM if requested
             if (this.extractor.options.lasm && typeof decompiled === 'object' && decompiled.lasm) {
-                const lasmPath = path.join(this.extractor.outputDir, `${member.name}.lasm`);
+                const lasmPath = path.join(this.extractor.outputDir, `${fileStem}.lasm`);
                 fs.writeFileSync(lasmPath, decompiled.lasm);
             }
 

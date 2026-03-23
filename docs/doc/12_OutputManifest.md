@@ -34,6 +34,7 @@ Each entry in `members` can include:
 - `checksum`
 - `format`
 - `image`
+- `palette`
 - `paletteFile`
 - `scriptFile`
 
@@ -45,10 +46,12 @@ Artifact-reference fields are stored as filenames relative to the output directo
 
 Examples of additional per-type fields:
 
-- bitmaps: `width`, `height`, `regPoint`, `bitDepth`, `paletteId`, `clutCastLib`
+- bitmaps: `width`, `height`, `regPoint`, `bitDepth`, `paletteId`, `clutCastLib`, `palette`
 - scripts: `scriptType`
 - shapes: `rect`, `pattern`, `foreColor`, `backColor`, `lineSize`
 - text/fields: text/style metadata when available
+
+For visual indexed members, `palette` stores resolved palette metadata such as the real source member/system palette, not the temporary greyscale export/render override used when `--colored` is disabled.
 
 Null members with no useful name are filtered before the final manifest is written.
 

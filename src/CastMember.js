@@ -324,6 +324,10 @@ class CastMember {
             Object.entries(common).filter(([_, v]) => v !== undefined && v !== null && v !== '')
         );
 
+        if (this.palette && !Array.isArray(this.palette) && typeof this.palette === 'object') {
+            result.palette = this.palette;
+        }
+
         // Type-Specific Attributes
         switch (this.typeId) {
             case MemberType.Bitmap: // 1

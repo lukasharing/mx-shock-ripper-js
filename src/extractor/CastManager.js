@@ -27,11 +27,16 @@ class CastManager {
             discoveredIds.add(parseInt(castIdStr));
         }
 
-        // 2. From LctX (ILS mapping)
-        for (const logicalId in metadata.lctxMap) {
-            const sectionId = metadata.lctxMap[logicalId];
-            const memberId = metadata.resolveMemberIdFromResource(sectionId) || parseInt(logicalId, 10);
-            if (memberId > 0) discoveredIds.add(memberId);
+        // 2. From LctX script contexts
+        for (const [logicalId, refs] of Object.entries(metadata.scriptSlotMap || {})) {
+            const slotId = parseInt(logicalId, 10);
+            const seenSections = new Set();
+            for (const ref of refs) {
+                if (!ref || seenSections.has(ref.sectionId)) continue;
+                seenSections.add(ref.sectionId);
+                const memberId = metadata.resolveMemberIdFromResource(ref.sectionId) || slotId;
+                if (memberId > 0) discoveredIds.add(memberId);
+            }
         }
 
         // 3. From Cast Order (MCsL / CAS*)
@@ -74,7 +79,7 @@ class CastManager {
             // Deterministic structural association:
             // If the member ID is explicitly mapped as a Script inside an Lctx (ScriptContext) block,
             // it is structurally defined as a Script by the engine, regardless of missing CASt chunk.
-            if (Object.values(metadata.lctxMap).includes(member.id) || Object.keys(metadata.lctxMap).includes(member.id.toString())) {
+            if (metadata.hasScriptContextReference(member.id)) {
                 member.typeId = MemberType.Script;
             }
         }
@@ -135,7 +140,35 @@ class CastManager {
             const { chunk, tag, detectedType } = orphan;
 
             const logicalId = (metadata.invFmap && metadata.invFmap[chunk.id] !== undefined) ? metadata.invFmap[chunk.id] : chunk.id;
-            const memberId = metadata.resolveMemberIdFromResource(logicalId) || logicalId;
+            const isScriptChunk = tag === Magic.LSCR || tag === Magic.LSCR_UPPER || tag === Magic.Lscl || tag === Magic.rcsL;
+            const scriptContextRefs = isScriptChunk
+                ? [
+                    ...(metadata.scriptSectionMap[logicalId] || []),
+                    ...(metadata.scriptSectionMap[chunk.id] || [])
+                ]
+                : [];
+            const contextRef = scriptContextRefs[0] || null;
+            const contextMember = contextRef
+                ? this.members.find(member => member && member.typeId === MemberType.Script && member.scriptId === contextRef.slotId)
+                : null;
+            const resolvedMemberId =
+                metadata.resolveMemberIdFromResource(logicalId, { allowSelf: false }) ||
+                metadata.resolveMemberIdFromResource(chunk.id, { allowSelf: false }) ||
+                contextMember?.id ||
+                0;
+            const memberId = isScriptChunk
+                ? (
+                    resolvedMemberId ||
+                    0
+                )
+                : (resolvedMemberId || logicalId);
+
+            if (isScriptChunk && memberId <= 0) {
+                if (this.extractor.options.verbose === true) {
+                    this.extractor.log('DEBUG', `[CastManager] Skipping unattached LSCR chunk ${chunk.id} (logical ${logicalId})`);
+                }
+                continue;
+            }
 
             if (this.extractor.options.verbose === true && (tag === Magic.STXT || tag === Magic.TEXT || tag === Magic.stxt_lower || tag === Magic.text_lower || memberId === 105)) {
                 this.extractor.log('DEBUG', `[CastManager] Orphan Chunk ${chunk.id} (logical ${logicalId}, tag ${tag}) -> Member ${memberId}`);

@@ -60,3 +60,13 @@ Standalone palette exports use JASC-PAL:
 4. `256` lines of `R G B`
 
 The emitted file extension is `.pal`.
+
+## Greyscale Mode
+
+When `--colored` is disabled, indexed bitmap rendering still resolves the real palette reference chain so manifest metadata can report the actual palette source.
+
+The runtime/export behavior then splits:
+
+- bitmap decoding uses a linear greyscale palette for pixel output
+- standalone `.pal` exports are written as greyscale JASC-PAL files
+- `members.json` keeps the real resolved palette metadata for visual members instead of replacing it with a synthetic greyscale placeholder

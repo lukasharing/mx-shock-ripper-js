@@ -73,12 +73,7 @@ class LingoDecompiler {
 
                 const N = nameTable.length;
                 const idx = (id - shift + (N * 50)) % N;
-                let name = nameTable[idx] || `u_${id}`;
-
-                if (id === LingoConfig.SPECIAL_IDS.TRACE_SCRIPT) name = 'traceScript';
-                if (id === LingoConfig.SPECIAL_IDS.PLAYER) name = '_player';
-                if (id === LingoConfig.SPECIAL_IDS.MOVIE) name = '_movie';
-                if (id === LingoConfig.SPECIAL_IDS.TYPE) name = 'type';
+                const name = nameTable[idx] || `u_${id}`;
 
                 cacheGroup[id] = name;
                 return name;
@@ -110,6 +105,7 @@ class LingoDecompiler {
                 }
 
                 const codes = this._getBytecodes(lscrData.slice(handler.off, handler.off + handler.len), handler.off);
+                this._tagLoops(codes, getName);
                 const stack = new LingoStack();
                 const ast = new ASTWrapper(new AST.Handler(hName, args));
 
@@ -250,26 +246,45 @@ class LingoDecompiler {
             const ds = new DataStream(data, 'big');
             ds.seek(info.offset);
             const firstId = ds.readUint16();
-
-            // Probe 1: Handler Shift
+            const handlers = this._getHandlers(new DataStream(data, 'big'), map, hLen);
             const nIdx = names.indexOf("new");
             const cIdx = names.indexOf("construct");
+            const rawHandlerScore = this._scoreHandlerShift(names, handlers, 0);
+            const shiftCandidates = [];
 
-
-
-
-
-
+            if (nIdx !== -1) {
+                shiftCandidates.push({
+                    label: 'new',
+                    shift: (firstId - nIdx + names.length) % names.length
+                });
+            }
+            if (cIdx !== -1) {
+                const constructShift = (firstId - cIdx + names.length) % names.length;
+                if (!shiftCandidates.some(candidate => candidate.shift === constructShift)) {
+                    shiftCandidates.push({
+                        label: 'construct',
+                        shift: constructShift
+                    });
+                }
+            }
 
             if (firstId === nIdx || firstId === cIdx) {
                 hShift = 0;
-            } else if ([LingoConfig.SCRIPT_TYPE.CAST, LingoConfig.SCRIPT_TYPE.LEGACY_BEHAVIOR, LingoConfig.SCRIPT_TYPE.LEGACY_CAST, LingoConfig.SCRIPT_TYPE.PARENT, LingoConfig.SCRIPT_TYPE.LEGACY_PARENT].includes(sType)) {
-                if (nIdx !== -1) {
-                    hShift = (firstId - nIdx + names.length) % names.length;
-                    this.log('DEBUG', `[ID:${memberId}] Calibrated hShift=${hShift} using 'new' (firstId=${firstId}, nIdx=${nIdx})`);
-                } else if (cIdx !== -1) {
-                    hShift = (firstId - cIdx + names.length) % names.length;
-                    this.log('DEBUG', `[ID:${memberId}] Calibrated hShift=${hShift} using 'construct' (firstId=${firstId}, cIdx=${cIdx})`);
+            } else if ([LingoConfig.SCRIPT_TYPE.CAST, LingoConfig.SCRIPT_TYPE.LEGACY_BEHAVIOR, LingoConfig.SCRIPT_TYPE.LEGACY_CAST, LingoConfig.SCRIPT_TYPE.PARENT, LingoConfig.SCRIPT_TYPE.LEGACY_PARENT].includes(sType) && shiftCandidates.length > 0) {
+                let bestCandidate = { label: 'raw', shift: 0, score: rawHandlerScore };
+                for (const candidate of shiftCandidates) {
+                    const score = this._scoreHandlerShift(names, handlers, candidate.shift);
+                    if (score > bestCandidate.score) {
+                        bestCandidate = { ...candidate, score };
+                    }
+                }
+
+                hShift = bestCandidate.shift;
+                if (hShift !== 0) {
+                    this.log(
+                        'DEBUG',
+                        `[ID:${memberId}] Calibrated hShift=${hShift} using '${bestCandidate.label}' (rawScore=${rawHandlerScore}, shiftedScore=${bestCandidate.score}, firstId=${firstId})`
+                    );
                 }
             } else {
                 hShift = 0;
@@ -279,6 +294,151 @@ class LingoDecompiler {
         }
         return { hShift, gShift, mShift };
 
+    }
+
+    _scoreHandlerShift(names, handlers, shift) {
+        if (!Array.isArray(names) || names.length === 0 || !Array.isArray(handlers) || handlers.length === 0) {
+            return Number.NEGATIVE_INFINITY;
+        }
+
+        let score = 0;
+        const sample = handlers.slice(0, Math.min(6, handlers.length));
+        for (const handler of sample) {
+            const resolvedName = this._resolveShiftedName(names, handler.nameId, shift);
+            if (this._looksLikeHandlerName(resolvedName)) {
+                score += 3;
+            } else {
+                score -= 4;
+            }
+        }
+        return score;
+    }
+
+    _isSymbolLiteral(node) {
+        return node instanceof AST.SymbolLiteral || (node instanceof AST.Literal && node.type === 'symbol');
+    }
+
+    _buildPropertyAccess(target, propNode) {
+        if (!this._isSymbolLiteral(propNode)) return null;
+        return new AST.BinaryOperator('.', target, new AST.VarReference(propNode.value));
+    }
+
+    _buildIndexedAccess(base, start, end = null) {
+        const indexExpr = end ? new AST.RangeExpression(start, end) : start;
+        return new AST.BinaryOperator('[]', base, indexExpr);
+    }
+
+    _readV4Property(propertyType, propertyID, ctx) {
+        const { stack, isV4 } = ctx;
+        if (typeof propertyID !== 'number') {
+            return new AST.VarReference(`v4prop_${propertyType}_${propertyID}`);
+        }
+
+        switch (propertyType) {
+            case 0x00:
+                if (propertyID <= 0x0b) {
+                    return new AST.TheExpression(LingoConfig.V4_MOVIE_PROPS[propertyID] || `movieProp_${propertyID}`);
+                }
+                return new AST.LastChunkExpression(propertyID - 0x0b, stack.pop());
+
+            case 0x01:
+                return new AST.ChunkCountExpression(propertyID, stack.pop());
+
+            case 0x06: {
+                const spriteID = stack.pop();
+                const propName = LingoConfig.V4_SPRITE_PROPS[propertyID] || `spriteProp_${propertyID}`;
+                return new AST.ObjectPropertyExpression(new AST.MemberExpression('sprite', spriteID), propName);
+            }
+
+            case 0x07:
+                return new AST.TheExpression(LingoConfig.V4_ANIMATION_PROPS[propertyID] || `animationProp_${propertyID}`);
+
+            case 0x08: {
+                const propName = LingoConfig.V4_ANIMATION2_PROPS[propertyID] || `animation2Prop_${propertyID}`;
+                if (propertyID === 0x02 && !isV4 && stack.length > 0) {
+                    const castLib = stack.peek();
+                    if (castLib instanceof AST.IntLiteral && castLib.value === 0) {
+                        stack.pop();
+                        return new AST.TheExpression(propName);
+                    }
+                    if (castLib && !(castLib instanceof AST.ERROR)) {
+                        return new AST.ObjectPropertyExpression(new AST.MemberExpression('castLib', stack.pop()), propName);
+                    }
+                }
+                return new AST.TheExpression(propName);
+            }
+
+            case 0x09:
+            case 0x0a:
+            case 0x0b:
+            case 0x0c:
+            case 0x0d:
+            case 0x0e:
+            case 0x0f:
+            case 0x10:
+            case 0x11:
+            case 0x12:
+            case 0x13:
+            case 0x14:
+            case 0x15: {
+                const propName = LingoConfig.V4_MEMBER_PROPS[propertyID] || `memberProp_${propertyID}`;
+                const castID = !isV4 ? stack.pop() : null;
+                const memberID = stack.pop();
+
+                let prefix;
+                if (propertyType === 0x0b || propertyType === 0x0c) {
+                    prefix = 'field';
+                } else if (propertyType === 0x14 || propertyType === 0x15) {
+                    prefix = 'script';
+                } else {
+                    prefix = !isV4 ? 'member' : 'cast';
+                }
+
+                const memberExpr = new AST.MemberExpression(prefix, memberID, castID);
+                const entity = (propertyType === 0x0a || propertyType === 0x0c || propertyType === 0x15)
+                    ? this._readChunkRef(stack, memberExpr)
+                    : memberExpr;
+
+                return new AST.ObjectPropertyExpression(entity, propName);
+            }
+
+            default:
+                return new AST.VarReference(`v4prop_${propertyType}_${propertyID}`);
+        }
+    }
+
+    _resolveShiftedName(names, id, shift) {
+        if (!Array.isArray(names) || names.length === 0 || id === undefined || id === null) return '';
+        const idx = (id - shift + (names.length * 50)) % names.length;
+        return names[idx] || '';
+    }
+
+    _looksLikeHandlerName(name) {
+        if (typeof name !== 'string' || !name) return false;
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return false;
+
+        const suspicious = new Set([
+            'me',
+            'constant',
+            'call',
+            'return',
+            'try',
+            'catch',
+            'param',
+            'paramCount',
+            'stringp',
+            'objectp',
+            'voidp',
+            'integerp',
+            'symbolp',
+            'width',
+            'height'
+        ]);
+
+        if (suspicious.has(name)) return false;
+        if (/^[alnpu]_\d+$/.test(name)) return false;
+        if (/^[tplag][A-Z]/.test(name)) return false;
+        return true;
     }
 
     /**
@@ -420,22 +580,251 @@ class LingoDecompiler {
             castLib = stack.pop();
         }
         const idNode = stack.pop();
-        const id = idNode.value;
+        if (!idNode || idNode instanceof AST.ERROR) {
+            return new AST.ERROR(`VarRef ${varType}: ${idNode?.msg || 'Stack Underflow'}`);
+        }
+
+        const id = (idNode.value !== undefined) ? idNode.value : null;
 
         switch (varType) {
             case 0x01: // global
             case 0x02: // global
+                if (idNode instanceof AST.VarReference || idNode instanceof AST.PropertyReference) return idNode;
+                if (id === null) return new AST.ERROR(`VarRef ${varType}: Invalid global id`);
                 return new AST.VarReference(resolver(id, "global"));
             case 0x03: // property/instance
+                if (idNode instanceof AST.VarReference || idNode instanceof AST.PropertyReference) return idNode;
+                if (id === null) return new AST.ERROR(`VarRef ${varType}: Invalid property id`);
                 return new AST.VarReference(resolver(id, "handle"));
             case 0x04: // arg
-                return new AST.ParamReference(id.toString());
+                if (idNode instanceof AST.ParamReference) return idNode;
+                if (id === null) return new AST.ERROR(`VarRef ${varType}: Invalid arg id`);
+                return new AST.ParamReference(ctx.handler.args[id] || `a_${id}`);
             case 0x05: // local
-                return new AST.LocalVarReference(id.toString());
+                if (idNode instanceof AST.LocalVarReference) return idNode;
+                if (id === null) return new AST.ERROR(`VarRef ${varType}: Invalid local id`);
+                return new AST.LocalVarReference(ctx.handler.locals[id] || `l_${id}`);
             case 0x06: // field
                 return new AST.MemberExpression("field", idNode, castLib);
             default:
                 return new AST.ERROR(`Unhandled var type ${varType}`);
+        }
+    }
+
+    _sameNode(a, b) {
+        if (!a || !b) return false;
+        if (a === b) return true;
+        return a.toString() === b.toString();
+    }
+
+    _isOpcode(bc, ...names) {
+        return !!bc && names.includes(bc.opcode);
+    }
+
+    _getLoopPosMap(codes) {
+        const posMap = new Map();
+        for (let i = 0; i < codes.length; i++) {
+            posMap.set(codes[i].pos, i);
+        }
+        return posMap;
+    }
+
+    _isNamedExtCall(bc, resolver, name) {
+        return this._isOpcode(bc, 'extcall', 'call_ext') && resolver(bc.obj, "handle") === name;
+    }
+
+    _identifyLoop(codes, startIndex, endIndex, resolver, posMap) {
+        if (this._isRepeatWithIn(codes, startIndex, endIndex, resolver)) {
+            return {
+                tag: 'repeat_with_in',
+                varSetIndex: startIndex + 5
+            };
+        }
+
+        if (startIndex < 1) return null;
+
+        let down = false;
+        if (this._isOpcode(codes[startIndex - 1], 'lteq')) {
+            down = false;
+        } else if (this._isOpcode(codes[startIndex - 1], 'gteq')) {
+            down = true;
+        } else {
+            return null;
+        }
+
+        const endRepeat = codes[endIndex - 1];
+        const conditionStartIndex = posMap.get(endRepeat.pos - endRepeat.obj);
+        if (conditionStartIndex === undefined || conditionStartIndex < 1) return null;
+
+        const setBc = codes[conditionStartIndex - 1];
+        const getBc = codes[conditionStartIndex];
+        const incrementStart = endIndex - 5;
+        if (incrementStart < 0) return null;
+
+        const expected = this._getMatchingGetOpcode(setBc);
+        if (!expected || !this._isOpcode(getBc, ...expected) || getBc.obj !== setBc.obj) {
+            return null;
+        }
+
+        const incConst = codes[incrementStart];
+        const incGet = codes[endIndex - 4];
+        const incAdd = codes[endIndex - 3];
+        const incSet = codes[endIndex - 2];
+
+        if (!this._isIntLiteralOpcode(incConst, down ? -1 : 1)) return null;
+        if (!this._isOpcode(incGet, ...expected) || incGet.obj !== setBc.obj) return null;
+        if (!this._isOpcode(incAdd, 'add')) return null;
+        if (!this._isOpcode(incSet, setBc.opcode) || incSet.obj !== setBc.obj) return null;
+
+        return {
+            tag: down ? 'repeat_with_down_to' : 'repeat_with_to',
+            conditionSetIndex: conditionStartIndex - 1
+        };
+    }
+
+    _isRepeatWithIn(codes, startIndex, endIndex, resolver) {
+        if (startIndex < 7 || startIndex + 5 >= codes.length || endIndex < 3 || endIndex >= codes.length) {
+            return false;
+        }
+
+        const before = [
+            codes[startIndex - 7],
+            codes[startIndex - 6],
+            codes[startIndex - 5],
+            codes[startIndex - 4],
+            codes[startIndex - 3],
+            codes[startIndex - 2],
+            codes[startIndex - 1]
+        ];
+        const after = [
+            codes[startIndex + 1],
+            codes[startIndex + 2],
+            codes[startIndex + 3],
+            codes[startIndex + 4],
+            codes[startIndex + 5]
+        ];
+
+        if (!this._isOpcode(before[0], 'peek') || before[0].obj !== 0) return false;
+        if (!this._isOpcode(before[1], 'pusharglist', 'push_arg_list') || before[1].obj !== 1) return false;
+        if (!this._isNamedExtCall(before[2], resolver, 'count')) return false;
+        if (!this._isIntLiteralOpcode(before[3], 1)) return false;
+        if (!this._isOpcode(before[4], 'peek') || before[4].obj !== 0) return false;
+        if (!this._isOpcode(before[5], 'peek') || before[5].obj !== 2) return false;
+        if (!this._isOpcode(before[6], 'lteq')) return false;
+
+        if (!this._isOpcode(after[0], 'peek') || after[0].obj !== 2) return false;
+        if (!this._isOpcode(after[1], 'peek') || after[1].obj !== 1) return false;
+        if (!this._isOpcode(after[2], 'pusharglist', 'push_arg_list') || after[2].obj !== 2) return false;
+        if (!this._isNamedExtCall(after[3], resolver, 'getAt')) return false;
+        if (!this._isSetOpcode(after[4])) return false;
+
+        if (!this._isIntLiteralOpcode(codes[endIndex - 3], 1)) return false;
+        if (!this._isOpcode(codes[endIndex - 2], 'add')) return false;
+        if (!this._isOpcode(codes[endIndex - 1], 'endrepeat')) return false;
+        if (!this._isOpcode(codes[endIndex], 'pop') || codes[endIndex].obj !== 3) return false;
+
+        return true;
+    }
+
+    _getMatchingGetOpcode(setBc) {
+        if (!setBc) return null;
+        switch (setBc.opcode) {
+            case 'setglobal':
+            case 'setglobal2':
+                return ['getglobal', 'getglobal2', 'push_global'];
+            case 'setprop':
+            case 'set_prop':
+                return ['getprop', 'push_prop'];
+            case 'setparam':
+            case 'set_param':
+                return ['getparam', 'get_param'];
+            case 'setlocal':
+            case 'set_local':
+                return ['getlocal', 'get_local'];
+            default:
+                return null;
+        }
+    }
+
+    _isSetOpcode(bc) {
+        return this._isOpcode(bc, 'setglobal', 'setglobal2', 'setprop', 'set_prop', 'setparam', 'set_param', 'setlocal', 'set_local');
+    }
+
+    _isIntLiteralOpcode(bc, value) {
+        if (!bc) return false;
+        if (this._isOpcode(bc, 'pushint8', 'push_int', 'pushint')) return bc.obj === value;
+        if (value === 0 && this._isOpcode(bc, 'pushint0', 'push_0')) return true;
+        if (value === 1 && this._isOpcode(bc, 'push_1')) return true;
+        if (value === 2 && this._isOpcode(bc, 'push_2')) return true;
+        return false;
+    }
+
+    _getLoopVarName(setBc, ctx) {
+        if (!setBc) return 'i';
+        switch (setBc.opcode) {
+            case 'setglobal':
+            case 'setglobal2':
+                return ctx.resolver(setBc.obj, 'global');
+            case 'setprop':
+            case 'set_prop':
+                return ctx.resolver(setBc.obj, 'handle');
+            case 'setparam':
+            case 'set_param':
+                return ctx.handler.args[setBc.obj] || `a_${setBc.obj}`;
+            case 'setlocal':
+            case 'set_local':
+                return ctx.handler.locals[setBc.obj] || `l_${setBc.obj}`;
+            default:
+                return 'i';
+        }
+    }
+
+    _tagLoops(codes, resolver) {
+        const posMap = this._getLoopPosMap(codes);
+
+        for (let startIndex = 0; startIndex < codes.length; startIndex++) {
+            const jmpIfZ = codes[startIndex];
+            if (!this._isOpcode(jmpIfZ, 'jmpifz', 'jmp_if_z')) continue;
+
+            const endPos = jmpIfZ.pos + jmpIfZ.obj;
+            const endIndex = posMap.get(endPos);
+            if (endIndex === undefined || endIndex < 1) continue;
+
+            const endRepeat = codes[endIndex - 1];
+            if (!this._isOpcode(endRepeat, 'endrepeat')) continue;
+            if ((endRepeat.pos - endRepeat.obj) > jmpIfZ.pos) continue;
+
+            const loopInfo = this._identifyLoop(codes, startIndex, endIndex, resolver, posMap);
+            if (!loopInfo) {
+                jmpIfZ.loopTag = 'repeat_while';
+                continue;
+            }
+
+            jmpIfZ.loopTag = loopInfo.tag;
+            jmpIfZ.loopInfo = loopInfo;
+
+            if (loopInfo.tag === 'repeat_with_in') {
+                for (let i = startIndex - 7; i <= startIndex - 1; i++) {
+                    codes[i].loopTag = 'skip';
+                }
+                for (let i = startIndex + 1; i <= startIndex + 5; i++) {
+                    codes[i].loopTag = 'skip';
+                }
+                codes[endIndex - 3].loopTag = 'skip';
+                codes[endIndex - 2].loopTag = 'skip';
+                codes[endIndex - 1].loopTag = 'skip';
+                codes[endIndex].loopTag = 'skip';
+            } else {
+                const conditionSetIndex = loopInfo.conditionSetIndex;
+                codes[conditionSetIndex].loopTag = 'skip';
+                codes[conditionSetIndex + 1].loopTag = 'skip';
+                codes[startIndex - 1].loopTag = 'skip';
+                codes[endIndex - 5].loopTag = 'skip';
+                codes[endIndex - 4].loopTag = 'skip';
+                codes[endIndex - 3].loopTag = 'skip';
+                codes[endIndex - 2].loopTag = 'skip';
+                codes[endIndex - 1].loopTag = 'skip';
+            }
         }
     }
 
@@ -452,11 +841,20 @@ class LingoDecompiler {
         const lastChar = stack.pop();
         const firstChar = stack.pop();
 
+        const isIntLiteral = (node, value) => node instanceof AST.IntLiteral && node.value === value;
+        const applyChunk = (type, first, last, node) => {
+            if (isIntLiteral(first, 0)) return node;
+            if (isIntLiteral(first, -30000) && isIntLiteral(last, 0)) {
+                return new AST.LastChunkExpression(type, node);
+            }
+            return new AST.ChunkExpression(type, first, last, node);
+        };
+
         let node = base;
-        if (firstLine?.toString() !== "0") node = new AST.ChunkExpression(4, firstLine, lastLine, node);
-        if (firstItem?.toString() !== "0") node = new AST.ChunkExpression(3, firstItem, lastItem, node);
-        if (firstWord?.toString() !== "0") node = new AST.ChunkExpression(2, firstWord, lastWord, node);
-        if (firstChar?.toString() !== "0") node = new AST.ChunkExpression(1, firstChar, lastChar, node);
+        node = applyChunk(4, firstLine, lastLine, node);
+        node = applyChunk(3, firstItem, lastItem, node);
+        node = applyChunk(2, firstWord, lastWord, node);
+        node = applyChunk(1, firstChar, lastChar, node);
 
         return node;
     }
@@ -467,6 +865,10 @@ class LingoDecompiler {
     _translate(bc, ctx) {
         const { stack, ast, resolver } = ctx;
         const op = bc.opcode;
+
+        if (bc.loopTag === 'skip') {
+            return;
+        }
 
         switch (op) {
             case 'ret':
@@ -509,10 +911,19 @@ class LingoDecompiler {
             case 'getchunk':
                 stack.push(this._readChunkRef(stack, stack.pop())); break;
             case 'putchunk': {
-                const val = stack.pop();
+                const putType = (bc.obj >> 4) & 0x0f;
                 const targetBase = this._readVar(stack, bc.obj & 0x0f, resolver, ctx);
+                if (targetBase instanceof AST.ERROR) {
+                    ast.addStatement(targetBase);
+                    break;
+                }
                 const chunk = this._readChunkRef(stack, targetBase);
-                ast.addStatement(new AST.AssignmentStatement(chunk, val));
+                const val = stack.pop();
+                if (putType >= 0x01 && putType <= 0x03) {
+                    ast.addStatement(new AST.PutStatement(putType, chunk, val));
+                } else {
+                    ast.addStatement(new AST.AssignmentStatement(chunk, val));
+                }
                 break;
             }
             case 'deletechunk': {
@@ -535,10 +946,18 @@ class LingoDecompiler {
                 break;
             }
             case 'put': {
-                const val = stack.pop();
-                // bc.obj & 0x0f is the target varType
+                const putType = (bc.obj >> 4) & 0x0f;
                 const target = this._readVar(stack, bc.obj & 0x0f, resolver, ctx);
-                ast.addStatement(new AST.AssignmentStatement(target, val));
+                if (target instanceof AST.ERROR) {
+                    ast.addStatement(target);
+                    break;
+                }
+                const val = stack.pop();
+                if (putType >= 0x01 && putType <= 0x03) {
+                    ast.addStatement(new AST.PutStatement(putType, target, val));
+                } else {
+                    ast.addStatement(new AST.AssignmentStatement(target, val));
+                }
                 break;
             }
             case 'getglobal': case 'getglobal2': case 'push_global':
@@ -579,14 +998,14 @@ class LingoDecompiler {
                 if (propName !== 'pNoiseStripped') ast.addStatement(new AST.AssignmentStatement(new AST.PropertyReference(propName), stack.pop()));
                 break;
 
-            case 'getmovieprop': case 'gettoplevelprop':
-                const globName = resolver(bc.obj, op.includes("movie") ? "movie_prop" : "global_prop");
-                const globPath = ['_movie', '_player', '_system', 'traceScript', 'mouseLoc'].includes(globName) ? (op.includes("movie") ? '_movie.' : 'the ') + globName : 'the ' + globName;
-                stack.push(new AST.VarReference(globPath)); break;
+            case 'getmovieprop':
+                stack.push(new AST.TheExpression(resolver(bc.obj, "movie_prop"))); break;
+
+            case 'gettoplevelprop':
+                stack.push(new AST.VarReference(resolver(bc.obj, "global_prop"))); break;
 
             case 'setmovieprop':
-                const sName = resolver(bc.obj, "movie_prop"), sPath = ['_player', '_system', 'traceScript'].includes(sName) ? '_movie.' + sName : 'the ' + sName;
-                ast.addStatement(new AST.AssignmentStatement(new AST.VarReference(sPath), stack.pop())); break;
+                ast.addStatement(new AST.AssignmentStatement(new AST.TheExpression(resolver(bc.obj, "movie_prop")), stack.pop())); break;
 
             case 'thebuiltin': {
                 // Built-in function call - args are already on stack as arglist
@@ -617,7 +1036,7 @@ class LingoDecompiler {
                     const callExpr = new AST.CallStatement(callFn, callArgs);
 
                     // HABBO ORIGINS: Try/Catch transformation
-                    if (callFn === 'try') {
+                    if (callFn === 'try' && callArgs instanceof AST.ArgListLiteral && callArgs.noRet && callArgs.value.length === 0) {
                         const tryNode = new AST.TryStatement();
                         ast.addStatement(tryNode);
                         ast.enterBlock(tryNode.tryBlock);
@@ -663,19 +1082,7 @@ class LingoDecompiler {
                 const propertyID = stack.pop();
                 const propertyType = bc.obj;
                 const propVal = (propertyID instanceof AST.Literal) ? propertyID.value : propertyID;
-
-                let v4ref;
-                if (propertyType === 0x00 && typeof propVal === 'number' && propertyID instanceof AST.Literal) {
-                    const moviePropNames = ["floatPrecision", "mouseDownScript", "mouseUpScript", "keyDownScript", "keyUpScript", "timeoutScript", "short time", "abbr time", "long time", "short date", "abbr date", "long date"];
-                    v4ref = moviePropNames[propVal] ? new AST.VarReference('the ' + moviePropNames[propVal]) : new AST.VarReference(`movieProp_${propVal}`);
-                } else if (propertyType === 0x06) {
-                    // Sprite property
-                    const spriteID = stack.pop();
-                    const propName = LingoConfig.V4_SPRITE_PROPS[propVal] || `spriteProp_${propVal}`;
-                    v4ref = new AST.BinaryOperator('.', spriteID, new AST.VarReference(propName));
-                } else {
-                    v4ref = new AST.VarReference(`v4prop_${propertyType}_${propVal}`);
-                }
+                const v4ref = this._readV4Property(propertyType, propVal, ctx);
 
                 if (op === 'get') {
                     stack.push(v4ref);
@@ -694,10 +1101,13 @@ class LingoDecompiler {
 
                 if (op === 'objcallv4') {
                     oTarget = new AST.VarReference(resolver(bc.obj, "handle"));
-                } else if (callArgs instanceof AST.ArgListLiteral && callArgs.targetOnStack && stack.length > 0 && !stack.peek().isStatement) {
-                    oTarget = stack.pop();
                 } else if (oVals.length > 0) {
                     oTarget = oVals.shift();
+                } else if (callArgs instanceof AST.ArgListLiteral && callArgs.targetOnStack && stack.length > 0 && !stack.peek().isStatement) {
+                    // Some handlers leave an earlier stack value around for a following opcode
+                    // like setobjprop; only consume it as a receiver when the arg list itself
+                    // does not provide one.
+                    oTarget = stack.pop();
                 } else {
                     oTarget = new AST.ERROR("Missing Object Target");
                 }
@@ -706,19 +1116,33 @@ class LingoDecompiler {
 
                 let objCallNode;
                 // Special cases for common Lingo methods
-                if (oMethod === 'count' && oVals.length === 1 && oVals[0] instanceof AST.Literal && (oVals[0].type === 'symbol' || oVals[0] instanceof AST.SymbolLiteral)) {
+                if (oMethod === 'count' && oVals.length === 1 && this._isSymbolLiteral(oVals[0])) {
                     const propRef = oVals[0].value;
                     objCallNode = new AST.BinaryOperator('.', oTarget, new AST.VarReference(propRef + '.count'));
-                } else if (oMethod === 'getProp' && oVals.length === 1 && oVals[0] instanceof AST.Literal && (oVals[0].type === 'symbol' || oVals[0] instanceof AST.SymbolLiteral)) {
-                    const propRef = oVals[0].value;
-                    objCallNode = new AST.BinaryOperator('.', oTarget, new AST.VarReference(propRef));
+                } else if ((oMethod === 'getProp' || oMethod === 'getPropRef') && oVals.length === 1 && this._isSymbolLiteral(oVals[0])) {
+                    objCallNode = this._buildPropertyAccess(oTarget, oVals[0]);
                 } else if (oMethod === 'getAt' && oVals.length === 1) {
                     objCallNode = new AST.BinaryOperator('[]', oTarget, oVals[0]);
+                } else if (oMethod === 'setAt' && oVals.length === 2) {
+                    objCallNode = new AST.AssignmentStatement(
+                        new AST.BinaryOperator('[]', oTarget, oVals[0]),
+                        oVals[1]
+                    );
+                } else if ((oMethod === 'getProp' || oMethod === 'getPropRef') && (oVals.length === 2 || oVals.length === 3) && this._isSymbolLiteral(oVals[0])) {
+                    const propExpr = this._buildPropertyAccess(oTarget, oVals[0]);
+                    objCallNode = this._buildIndexedAccess(propExpr, oVals[1], oVals[2] || null);
+                } else if (oMethod === 'setProp' && (oVals.length === 3 || oVals.length === 4) && this._isSymbolLiteral(oVals[0])) {
+                    const propExpr = this._buildPropertyAccess(oTarget, oVals[0]);
+                    const valueExpr = oVals[oVals.length - 1];
+                    const targetExpr = this._buildIndexedAccess(propExpr, oVals[1], oVals.length === 4 ? oVals[2] : null);
+                    objCallNode = new AST.AssignmentStatement(targetExpr, valueExpr);
                 } else {
                     objCallNode = new AST.ObjCallStatement(oTarget, oMethod, new AST.ArgListLiteral(oVals));
                 }
 
-                if (callArgs?.noRet) {
+                if (objCallNode?.isStatement) {
+                    ast.addStatement(objCallNode);
+                } else if (callArgs?.noRet) {
                     objCallNode.isStatement = true;
                     ast.addStatement(objCallNode);
                 } else {
@@ -732,9 +1156,9 @@ class LingoDecompiler {
                 const objP = stack.pop();
                 const propId = resolver(bc.obj, "handle");
                 if (objP) {
-                    stack.push(new AST.BinaryOperator('.', objP, new AST.VarReference(propId)));
+                    stack.push(new AST.ObjectPropertyExpression(objP, propId));
                 } else {
-                    stack.push(new AST.VarReference('the ' + propId));
+                    stack.push(new AST.TheExpression(propId));
                 }
                 break;
             }
@@ -742,9 +1166,9 @@ class LingoDecompiler {
             case 'setobjprop': case 'set_prop_obj':
                 const valS = stack.pop(), objS = stack.pop(), sPropId = resolver(bc.obj, "handle");
                 if (objS) {
-                    ast.addStatement(new AST.AssignmentStatement(new AST.BinaryOperator('.', objS, new AST.VarReference(sPropId)), valS));
+                    ast.addStatement(new AST.AssignmentStatement(new AST.ObjectPropertyExpression(objS, sPropId), valS));
                 } else {
-                    ast.addStatement(new AST.AssignmentStatement(new AST.VarReference('the ' + sPropId), valS));
+                    ast.addStatement(new AST.AssignmentStatement(new AST.TheExpression(sPropId), valS));
                 }
                 break;
 
@@ -756,7 +1180,35 @@ class LingoDecompiler {
                 break;
 
             case 'jmpifz': case 'jmp_if_z': {
-                const blockEnd = bc.pos + bc.obj, condVal = stack.pop();
+                const blockEnd = bc.pos + bc.obj;
+
+                if (bc.loopTag === 'repeat_with_in') {
+                    const listExpr = stack.pop();
+                    const varName = this._getLoopVarName(ctx.codes[bc.loopInfo.varSetIndex], ctx);
+                    const repeatNode = new AST.RepeatWithInStatement(varName, listExpr);
+                    repeatNode.block.endPos = blockEnd;
+                    ast.addStatement(repeatNode);
+                    ast.enterBlock(repeatNode.block);
+                    break;
+                }
+
+                if (bc.loopTag === 'repeat_with_to' || bc.loopTag === 'repeat_with_down_to') {
+                    const endExpr = stack.pop();
+                    const startExpr = stack.pop();
+                    const varName = this._getLoopVarName(ctx.codes[bc.loopInfo.conditionSetIndex], ctx);
+                    const repeatNode = new AST.RepeatWithStatement(
+                        varName,
+                        startExpr,
+                        endExpr,
+                        bc.loopTag === 'repeat_with_down_to'
+                    );
+                    repeatNode.block.endPos = blockEnd;
+                    ast.addStatement(repeatNode);
+                    ast.enterBlock(repeatNode.block);
+                    break;
+                }
+
+                const condVal = stack.pop();
 
                 // HABBO ORIGINS: Catch transformation
                 // Detect 'if catch() then'
@@ -771,22 +1223,16 @@ class LingoDecompiler {
                     break;
                 }
 
-                if (ctx.activeCase && condVal instanceof AST.BinaryOperator && condVal.op === '=') {
+                if (ctx.activeCase &&
+                    condVal instanceof AST.BinaryOperator &&
+                    condVal.op === '=' &&
+                    this._sameNode(condVal.left, ctx.activeCase.expr)) {
                     const branch = new AST.CaseBranch([condVal.right]);
                     branch.block.endPos = blockEnd;
                     ctx.activeCase.addBranch(branch);
                     ast.enterBlock(branch.block);
                 } else {
-                    // Detect repeat-while: look for endrepeat before blockEnd
-                    let isRepeatWhile = false;
-                    for (let j = ctx.index + 1; j < ctx.codes.length; j++) {
-                        const futureBc = ctx.codes[j];
-                        if (futureBc.pos >= blockEnd) break;
-                        if (futureBc.opcode === 'endrepeat') {
-                            isRepeatWhile = true;
-                            break;
-                        }
-                    }
+                    const isRepeatWhile = bc.loopTag === 'repeat_while';
 
                     if (isRepeatWhile) {
                         const repeatNode = new AST.RepeatWhileStatement(condVal);
@@ -809,7 +1255,9 @@ class LingoDecompiler {
                 let inLoop = false;
                 let currNode = ast.currentBlock;
                 while (currNode) {
-                    if (currNode.parent instanceof AST.RepeatWhileStatement || currNode.parent instanceof AST.RepeatWithStatement) {
+                    if (currNode.parent instanceof AST.RepeatWhileStatement
+                        || currNode.parent instanceof AST.RepeatWithStatement
+                        || currNode.parent instanceof AST.RepeatWithInStatement) {
                         if (jumpTarget >= currNode.parent.block.endPos) {
                             inLoop = true;
                             break;
@@ -841,10 +1289,15 @@ class LingoDecompiler {
                 break;
 
             case 'peek':
-                const valPeek = stack.peek();
+                {
+                const depth = Number.isInteger(bc.obj) ? bc.obj : 0;
+                const idx = stack.length - 1 - depth;
+                const valPeek = idx >= 0
+                    ? stack._items[idx]
+                    : ((depth === 0 && ctx.activeCase) ? ctx.activeCase.expr : new AST.ERROR("Stack Underflow"));
                 stack.push(valPeek);
 
-                if (!ctx.activeCase && ctx.index + 3 < ctx.codes.length) {
+                if (depth === 0 && !ctx.activeCase && ctx.index + 3 < ctx.codes.length) {
                     const n1 = ctx.codes[ctx.index + 1], n2 = ctx.codes[ctx.index + 2], n3 = ctx.codes[ctx.index + 3];
                     if (n1.opcode.startsWith('push') && n2.opcode === 'eq' && n3.opcode === 'jmpifz') {
                         ctx.activeCase = new AST.CaseStatement(valPeek);
@@ -853,6 +1306,7 @@ class LingoDecompiler {
                     }
                 }
                 break;
+                }
 
             case 'endrepeat':
                 // endrepeat jumps back to the loop condition; the block exit is handled

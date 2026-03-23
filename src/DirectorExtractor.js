@@ -39,7 +39,8 @@ const DataStream = require('./utils/DataStream');
 const { MemberType, Magic, Resources } = require('./Constants');
 const { Palette } = require('./utils/Palette');
 const Logger = require('./utils/Logger');
-const { getContentTagsForType, getMatchingTagsForType } = require('./utils/MemberContent');
+const { buildScriptArtifactStem } = require('./utils/ArtifactNames');
+const { getContentTagsForType, getMatchingTagsForType, getPreferredSectionId } = require('./utils/MemberContent');
 
 class DirectorExtractor extends BaseExtractor {
     constructor(inputPath, outputDir, options = {}) {
@@ -311,7 +312,7 @@ class DirectorExtractor extends BaseExtractor {
             }
 
             const map = this.metadataManager.keyTable[m.id] || {};
-            const isLctxScript = m.typeId === MemberType.Script && (m.scriptId > 0 || this.metadataManager.lctxMap[m.id] !== undefined);
+            const isLctxScript = m.typeId === MemberType.Script && !!this.metadataManager.resolveScriptSectionId(m);
 
             if (Object.keys(map).length === 0 && !isLctxScript) {
                 this.trackQueueDrop('no_key_map');
@@ -452,6 +453,7 @@ class DirectorExtractor extends BaseExtractor {
                                 width: m.width,
                                 height: m.height,
                                 name: m.name,
+                                palette: m.palette,
                                 outcome: m.outcome
                             };
                         }
@@ -489,6 +491,7 @@ class DirectorExtractor extends BaseExtractor {
                         if (prev.scriptFile) m.scriptFile = prev.scriptFile;
                         if (prev.width) m.width = prev.width;
                         if (prev.height) m.height = prev.height;
+                        if (!m.palette && prev.palette) m.palette = prev.palette;
                     } else if (m && msg.checksum) {
                         m.checksum = msg.checksum;
                     }
@@ -504,6 +507,7 @@ class DirectorExtractor extends BaseExtractor {
                             width: m.width,
                             height: m.height,
                             name: m.name,
+                            palette: m.palette,
                             outcome: m.outcome
                         };
                     }
@@ -540,14 +544,16 @@ class DirectorExtractor extends BaseExtractor {
             const sendTask = async (worker, member) => {
                 const outPathPrefix = path.join(this.outputDir, (member.name || `member_${member.id}`).replace(/[/\\?%*:|"<>]/g, '_'));
 
-
-                let scriptChunkIndex = member._chunkIndex;
-                if (member.typeId === MemberType.Script && !scriptChunkIndex) {
-                    const lscrId = (member.scriptId > 0 && this.metadataManager.lctxMap[member.scriptId]) || 
-                                   (this.metadataManager.lctxMap[member.id]);
+                let scriptChunkId = null;
+                if (member.typeId === MemberType.Script) {
+                    const scriptMap = this.metadataManager.keyTable[member.id] || null;
+                    const lscrId = this.metadataManager.resolveScriptSectionId(member);
                     if (lscrId) {
-                        const chunk = this.dirFile.getChunkById(lscrId);
-                        if (chunk) scriptChunkIndex = this.dirFile.chunks.indexOf(chunk);
+                        scriptChunkId = lscrId;
+                    } else if (scriptMap) {
+                        scriptChunkId = getPreferredSectionId(scriptMap, MemberType.Script) || Object.values(scriptMap)[0] || null;
+                    } else if (Number.isInteger(member._chunkIndex) && member._chunkIndex >= 0) {
+                        scriptChunkId = this.dirFile.chunks[member._chunkIndex]?.id || null;
                     }
                 }
 
@@ -570,12 +576,13 @@ class DirectorExtractor extends BaseExtractor {
                         _initialRect: member._initialRect,
                         rect: member.rect
                     },
-                    outPathPrefix,
-                    knownChecksum: this.metadataStore[member.id]?.checksum,
-                    palette: member._resolvedPalette,
-                    nameTable: (member.typeId === MemberType.Script) 
-                        ? this.metadataManager.getNameTableForScript(this.dirFile.chunks[scriptChunkIndex]?.id) 
-                        : null
+                        outPathPrefix,
+                        knownChecksum: this.metadataStore[member.id]?.checksum,
+                        palette: member._resolvedPalette,
+                        scriptChunkId,
+                        nameTable: (member.typeId === MemberType.Script)
+                            ? this.metadataManager.getNameTableForScript(scriptChunkId)
+                            : null
                 });
             };
 
@@ -676,13 +683,9 @@ class DirectorExtractor extends BaseExtractor {
 
         const matchedChunkIds = new Set();
 
-        // Pass 1a: Match via lctxMap (scriptId ONLY - highly reliable)
+        // Pass 1: Match via script context mapping
         for (const script of scripts) {
-            let lscrId = 0;
-            if (script.scriptId > 0 && this.metadataManager.lctxMap[script.scriptId]) {
-                lscrId = this.metadataManager.lctxMap[script.scriptId];
-            }
-
+            const lscrId = this.metadataManager.resolveScriptSectionId(script);
             if (!lscrId) continue;
 
             const chunk = lscrChunks.find(c => c.id === lscrId);
@@ -700,13 +703,13 @@ class DirectorExtractor extends BaseExtractor {
             if (source) {
                 let finalName = script.name;
                 if (/^member_\d+$/.test(finalName)) {
-                    // Try deterministic naming from LSCR header (factoryId) at offset 46
-                    if (data && data.length >= 48) {
+                    // Try deterministic naming from LSCR header (factoryNameID) at offset 48
+                    if (data && data.length >= 50) {
                         const hLen = data.readUInt16BE(16);
                         if (hLen >= 92) {
-                            const factoryId = data.readInt16BE(46);
-                            if (factoryId >= 0 && this.metadataManager.nameTable[factoryId]) {
-                                finalName = this.metadataManager.nameTable[factoryId];
+                            const factoryId = data.readInt16BE(48);
+                            if (factoryId >= 0 && resolvedNameTable[factoryId]) {
+                                finalName = resolvedNameTable[factoryId];
                                 script.name = finalName;
                             }
                         }
@@ -722,67 +725,13 @@ class DirectorExtractor extends BaseExtractor {
                         }
                     }
                 }
-                const lsPath = path.join(this.outputDir, `${finalName}.ls`);
+                const fileStem = buildScriptArtifactStem(finalName, script.id, script.scriptType || 0);
+                const lsPath = path.join(this.outputDir, `${fileStem}.ls`);
                 fs.writeFileSync(lsPath, source);
                 if (this.options.lasm && typeof decompiled === 'object' && decompiled.lasm) {
-                    fs.writeFileSync(path.join(this.outputDir, `${finalName}.lasm`), decompiled.lasm);
+                    fs.writeFileSync(path.join(this.outputDir, `${fileStem}.lasm`), decompiled.lasm);
                 }
-                script.format = Resources.Formats.LS;
-            }
-        }
-
-        // Pass 1b: Fallback match via lctxMap (member id) for remaining unmatched scripts
-        const partiallyUnmatchedScripts = scripts.filter(s => !s.format);
-        for (const script of partiallyUnmatchedScripts) {
-            let lscrId = 0;
-            if (this.metadataManager.lctxMap[script.id]) {
-                lscrId = this.metadataManager.lctxMap[script.id];
-            }
-
-            if (!lscrId) continue;
-
-            const chunk = lscrChunks.find(c => c.id === lscrId);
-            if (!chunk || matchedChunkIds.has(chunk.id)) continue;
-            matchedChunkIds.add(chunk.id);
-
-            const data = await this.dirFile.getChunkData(chunk);
-            if (!data) continue;
-
-            const scriptChunkIndex = this.dirFile.chunks.indexOf(chunk);
-            const resolvedNameTable = this.metadataManager.getNameTableForScript(chunk.id);
-
-            const decompiled = this.lingoDecompiler.decompile(data, resolvedNameTable, script.scriptType || 0, script.id, { lasm: this.options.lasm });
-            const source = (typeof decompiled === 'object') ? decompiled.source : decompiled;
-            if (source) {
-                let finalName = script.name;
-                if (/^member_\d+$/.test(finalName)) {
-                    // Try deterministic naming from LSCR header (factoryId) at offset 46
-                    if (data && data.length >= 48) {
-                        const hLen = data.readUInt16BE(16);
-                        if (hLen >= 92) {
-                            const factoryId = data.readInt16BE(46);
-                            if (factoryId >= 0 && this.metadataManager.nameTable[factoryId]) {
-                                finalName = this.metadataManager.nameTable[factoryId];
-                                script.name = finalName;
-                            }
-                        }
-                    }
-
-                    if (/^member_\d+$/.test(finalName)) {
-                        // Heuristic sniffing fallback
-                        const match = String(source).match(/["']([a-zA-Z0-9_.-]+\.class)["']/i);
-                        if (match && match[1]) {
-                            finalName = match[1];
-                            script.name = finalName;
-                            this.log('INFO', `Heuristic algorithm renamed anonymous ${script.name} -> ${finalName}`);
-                        }
-                    }
-                }
-                const lsPath = path.join(this.outputDir, `${finalName}.ls`);
-                fs.writeFileSync(lsPath, source);
-                if (this.options.lasm && typeof decompiled === 'object' && decompiled.lasm) {
-                    fs.writeFileSync(path.join(this.outputDir, `${finalName}.lasm`), decompiled.lasm);
-                }
+                script.scriptFile = path.basename(lsPath);
                 script.format = Resources.Formats.LS;
             }
         }
@@ -804,13 +753,13 @@ class DirectorExtractor extends BaseExtractor {
                 if (source) {
                     let finalName = unmatchedScripts[i].name;
                     if (/^member_\d+$/.test(finalName)) {
-                        // Try deterministic naming from LSCR header (factoryId) at offset 46
-                        if (data && data.length >= 48) {
+                        // Try deterministic naming from LSCR header (factoryNameID) at offset 48
+                        if (data && data.length >= 50) {
                             const hLen = data.readUInt16BE(16);
                             if (hLen >= 92) {
-                                const factoryId = data.readInt16BE(46);
-                                if (factoryId >= 0 && this.metadataManager.nameTable[factoryId]) {
-                                    finalName = this.metadataManager.nameTable[factoryId];
+                                const factoryId = data.readInt16BE(48);
+                                if (factoryId >= 0 && resolvedNameTable[factoryId]) {
+                                    finalName = resolvedNameTable[factoryId];
                                     unmatchedScripts[i].name = finalName;
                                 }
                             }
@@ -825,11 +774,13 @@ class DirectorExtractor extends BaseExtractor {
                             }
                         }
                     }
-                    const lsPath = path.join(this.outputDir, `${finalName}.ls`);
+                    const fileStem = buildScriptArtifactStem(finalName, unmatchedScripts[i].id, unmatchedScripts[i].scriptType || 0);
+                    const lsPath = path.join(this.outputDir, `${fileStem}.ls`);
                     fs.writeFileSync(lsPath, source);
                     if (this.options.lasm && typeof decompiled === 'object' && decompiled.lasm) {
-                        fs.writeFileSync(path.join(this.outputDir, `${finalName}.lasm`), decompiled.lasm);
+                        fs.writeFileSync(path.join(this.outputDir, `${fileStem}.lasm`), decompiled.lasm);
                     }
+                    unmatchedScripts[i].scriptFile = path.basename(lsPath);
                     unmatchedScripts[i].format = Resources.Formats.LS;
                 }
             }

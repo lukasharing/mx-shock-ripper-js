@@ -16,6 +16,7 @@ const MovieExtractor = require('../member/MovieExtractor');
 const GenericExtractor = require('../member/GenericExtractor');
 const LingoDecompiler = require('../lingo/LingoDecompiler');
 const { MemberType, Magic, Resources } = require('../Constants');
+const { buildScriptArtifactStem } = require('../utils/ArtifactNames');
 const { getPreferredSectionId } = require('../utils/MemberContent');
 
 /**
@@ -167,7 +168,7 @@ const lingoDecompiler = new LingoDecompiler(logProxy, mockExtractor);
 
 
 parentPort.on('message', async (task) => {
-    const { member, outPathPrefix, palette, knownChecksum } = task;
+    const { member, outPathPrefix, palette, knownChecksum, scriptChunkId } = task;
     const memberId = member.id;
 
     try {
@@ -240,17 +241,9 @@ parentPort.on('message', async (task) => {
         } else if (typeId === MemberType.Palette) {
             result = await palette.process(data, memberId, chunks, fmap, workerOptions);
         } else if (typeId === MemberType.Script) {
-            // Resolve correct Lscr ID using lctxMap mirroring ScriptHandler logic
-            let lscrId = 0;
-            if (member.scriptId > 0 && lctxMap[member.scriptId]) {
-                lscrId = lctxMap[member.scriptId];
-            } else if (memberId > 0 && lctxMap[memberId]) {
-                lscrId = lctxMap[memberId];
-            }
-
-
+            const lscrId = scriptChunkId || sectionId || 0;
             let scriptData = data;
-            if (lscrId && lscrId !== sectionId) {
+            if (lscrId && (!scriptData || lscrId !== sectionId)) {
                 const lscrChunk = getChunkById(lscrId);
                 if (isReadableChunk(lscrChunk)) {
                     scriptData = await getChunkData(lscrChunk);
@@ -269,14 +262,14 @@ parentPort.on('message', async (task) => {
 
 
                 if (/^member_\d+$/.test(finalName)) {
-                    // 1. Try deterministic naming from LSCR header (factoryId) at offset 46
-                    if (scriptData && scriptData.length >= 48) {
+                    // 1. Try deterministic naming from LSCR header (factoryNameID) at offset 48
+                    if (scriptData && scriptData.length >= 50) {
                         scriptData = Buffer.from(scriptData); // Ensure Buffer (ilsBody.slice may return Uint8Array)
                         const hLen = scriptData.readUInt16BE(16);
                         if (hLen >= 92) {
                             const factoryId = scriptData.readInt16BE(48);
-                            if (factoryId >= 0 && nameTable[factoryId]) {
-                                finalName = nameTable[factoryId];
+                            if (factoryId >= 0 && resolvedNameTable[factoryId]) {
+                                finalName = resolvedNameTable[factoryId];
                                 wasRenamed = true;
                             }
                         }
@@ -294,7 +287,7 @@ parentPort.on('message', async (task) => {
                     }
                 }
 
-                const safeName = finalName.replace(/[/\\?%*:|"<>]/g, '_');
+                const safeName = buildScriptArtifactStem(finalName, memberId, member.scriptType || 0);
                 const outDir = require('path').dirname(outPathPrefix);
                 const outPath = require('path').join(outDir, `${safeName}.ls`);
 

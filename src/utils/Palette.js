@@ -425,6 +425,28 @@ class Palette {
     static getWindowsSystem() { return PALETTES.WIN; }
     static getGrayscale() { return PALETTES.GRAYSCALE; }
 
+    static shouldUseGrayscaleRender(member, extractor, bitDepth = member?.bitDepth || 0) {
+        return extractor?.options?.colored === false && !!member && bitDepth > 1 && bitDepth <= 8;
+    }
+
+    static getBitmapRenderPalette(member, extractor, resolvedPalette = null, bitDepth = member?.bitDepth || 0) {
+        if (bitDepth === 1) {
+            return [[255, 255, 255], [0, 0, 0]];
+        }
+        if (this.shouldUseGrayscaleRender(member, extractor, bitDepth)) {
+            return this.getGrayscale();
+        }
+        return resolvedPalette;
+    }
+
+    static getPaletteExportData(palette, extractor) {
+        if (!Array.isArray(palette) || palette.length === 0) return palette;
+        if (extractor?.options?.colored === false) {
+            return this.getGrayscale();
+        }
+        return palette;
+    }
+
     /**
      * Standard Director System Palette IDs
      */
@@ -680,20 +702,13 @@ class Palette {
             return [[255, 255, 255], [0, 0, 0]];
         }
 
-        // Check if colorization is disabled
-        if (extractor?.options?.colored === false && member.bitDepth <= 8) {
-            member.palette = { name: "Grayscale (Linear)", castlib: 'system', forced: true };
-            return null; // Triggers greyscale fallback in BitmapExtractor
-        }
-
-
-        // --- PHASE 2: Canonical Resolution ---
-
         let logicalPaletteId = member.paletteId;
         const hasModernBit = (member._castFlags & 0x20) !== 0;
         if (hasModernBit && member.secondaryPaletteId) {
             logicalPaletteId = member.secondaryPaletteId;
         }
+
+        // --- PHASE 2: Canonical Resolution ---
 
         // Canonical Movie Default Resolution (Standardized)
         // Only an unresolved/implicit palette id should inherit the movie default.

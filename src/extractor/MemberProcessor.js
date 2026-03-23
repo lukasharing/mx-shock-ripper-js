@@ -81,8 +81,10 @@ class MemberProcessor {
                 result = await this.extractor.bitmapExtractor.extract(member.data, outPathPrefix + ".png", member, finalPalette, member.alphaData);
             } else if (typeId === MemberType.Palette) {
                 if (member.data) {
-                    member.palette = Palette.parseDirector(member.data);
-                    result = await this.extractor.paletteExtractor.save(member.palette, outPathPrefix + ".pal", member);
+                    const realPalette = Palette.parseDirector(member.data);
+                    member.palette = realPalette;
+                    const exportPalette = Palette.getPaletteExportData(realPalette, this.extractor);
+                    result = await this.extractor.paletteExtractor.save(exportPalette, outPathPrefix + ".pal", member);
                 }
             } else if (typeId === MemberType.Script) {
                 result = await this.extractor.scriptHandler.handleScripts(member, map);
@@ -145,13 +147,15 @@ class MemberProcessor {
 
             const data = await this.extractor.dirFile.getChunkData(chunk);
             if (data) {
-                member.palette = Palette.parseDirector(data);
+                const realPalette = Palette.parseDirector(data);
+                member.palette = realPalette;
                 if (!this.extractor.defaultMoviePalette) {
-                    this.extractor.defaultMoviePalette = member.palette;
+                    this.extractor.defaultMoviePalette = realPalette;
                 }
                 if (this.extractor.options.palette) {
                     const outPath = path.join(this.extractor.outputDir, `${member.name}.pal`);
-                    const result = await this.extractor.paletteExtractor.save(member.palette, outPath, member);
+                    const exportPalette = Palette.getPaletteExportData(realPalette, this.extractor);
+                    const result = await this.extractor.paletteExtractor.save(exportPalette, outPath, member);
                     if (result) member.format = result.format;
                 }
             }

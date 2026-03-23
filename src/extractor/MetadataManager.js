@@ -17,6 +17,9 @@ class MetadataManager {
         this.nameTables = []; // Array of { index: number, names: string[] }
         this.scriptToLnam = {};
         this.lctxMap = {};
+        this.scriptContexts = [];
+        this.scriptSlotMap = {};
+        this.scriptSectionMap = {};
         this.castList = []; // Implicit Slot Order from Key Table
     }
 
@@ -52,6 +55,102 @@ class MetadataManager {
         }
     }
 
+    _getScriptSectionFromMap(map) {
+        if (!map) return 0;
+        return map[Magic.LSCR] || map[Magic.LSCR_UPPER] || map[Magic.Lscl] || map[Magic.rcsL] || 0;
+    }
+
+    _getCastMetadataSectionFromMap(map) {
+        if (!map) return 0;
+        return map[Magic.CAST] || map[Magic.CAS_STAR] || map[Magic.CArT] || map[Magic.CAsT] || map[Magic.cast_lower] || 0;
+    }
+
+    _getChunkIndexById(id) {
+        if (!Number.isInteger(id) || id <= 0 || !this.extractor?.dirFile?.chunks) return -1;
+        return this.extractor.dirFile.chunks.findIndex(chunk => chunk.id === id);
+    }
+
+    getScriptContextsForSlot(slotId) {
+        if (!Number.isInteger(slotId) || slotId <= 0) return [];
+        return this.scriptSlotMap[slotId] || [];
+    }
+
+    hasScriptContextReference(id) {
+        if (!Number.isInteger(id) || id <= 0) return false;
+        return !!((this.scriptSlotMap[id] && this.scriptSlotMap[id].length > 0) ||
+            (this.scriptSectionMap[id] && this.scriptSectionMap[id].length > 0));
+    }
+
+    _scoreScriptContext(member, ref) {
+        let score = 0;
+
+        if (!member || !ref) return score;
+
+        const directScriptSection = this._getScriptSectionFromMap(this.keyTable[member.id]);
+        if (directScriptSection > 0 && directScriptSection === ref.sectionId) score += 1000;
+
+        if (this.resToMember[ref.sectionId] === member.id) score += 400;
+        if (Number.isInteger(ref.ownerId) && ref.ownerId > 0) {
+            if (ref.ownerId === member.id) score += 250;
+            if (member.originalSlotId > 0 && ref.ownerId === member.originalSlotId) score += 225;
+        }
+
+        if (Number.isInteger(member._chunkIndex) && member._chunkIndex >= 0) {
+            let ownerChunkIndex = -1;
+            const ownerMap = ref.ownerId > 0 ? this.keyTable[ref.ownerId] : null;
+            const ownerCastChunkId = this._getCastMetadataSectionFromMap(ownerMap);
+            if (ownerCastChunkId > 0) ownerChunkIndex = this._getChunkIndexById(ownerCastChunkId);
+            if (ownerChunkIndex < 0) ownerChunkIndex = this._getChunkIndexById(ref.chunkId);
+            if (ownerChunkIndex >= 0) {
+                const distance = Math.abs(member._chunkIndex - ownerChunkIndex);
+                score += Math.max(0, 40 - Math.min(distance, 40));
+                if (ownerChunkIndex <= member._chunkIndex) score += 5;
+            }
+        }
+
+        return score;
+    }
+
+    getScriptContextCandidatesForMember(member, slotId = 0) {
+        const targetSlotId = slotId > 0 ? slotId : (member?.scriptId || 0);
+        if (!Number.isInteger(targetSlotId) || targetSlotId <= 0) return [];
+
+        return this.getScriptContextsForSlot(targetSlotId)
+            .map(ref => ({ ...ref, score: this._scoreScriptContext(member, ref) }))
+            .sort((a, b) => {
+                if (b.score !== a.score) return b.score - a.score;
+                if ((a.ownerId || 0) !== (b.ownerId || 0)) return (a.ownerId || 0) - (b.ownerId || 0);
+                return a.sectionId - b.sectionId;
+            });
+    }
+
+    resolveScriptSectionId(member, { allowUniqueFallback = true } = {}) {
+        if (!member) return null;
+
+        const scriptSlotId = member.scriptId > 0
+            ? member.scriptId
+            : (this.hasScriptContextReference(member.id) ? member.id : 0);
+
+        if (scriptSlotId > 0) {
+            const candidates = this.getScriptContextCandidatesForMember(member, scriptSlotId);
+            if (candidates.length === 1) return candidates[0].sectionId;
+            if (candidates.length > 1 && candidates[0].score > candidates[1].score) return candidates[0].sectionId;
+            if (allowUniqueFallback && this.lctxMap[scriptSlotId]) return this.lctxMap[scriptSlotId];
+        }
+
+        const directScriptSection = this._getScriptSectionFromMap(this.keyTable[member.id]);
+        if (directScriptSection > 0) return directScriptSection;
+
+        if (Number.isInteger(member._chunkIndex) && member._chunkIndex >= 0) {
+            const directChunk = this.extractor.dirFile.chunks[member._chunkIndex];
+            if (directChunk && [Magic.LSCR, Magic.LSCR_UPPER, Magic.Lscl, Magic.rcsL].includes(directChunk.type)) {
+                return directChunk.id;
+            }
+        }
+
+        return null;
+    }
+
     resolveMemberIdFromResource(resourceId, { allowSelf = true } = {}) {
         if (!Number.isInteger(resourceId) || resourceId <= 0) return null;
 
@@ -69,9 +168,7 @@ class MetadataManager {
         const members = Array.isArray(this.extractor.members) ? this.extractor.members : [];
         const linkedMember = members.find(member => member && (
             member.originalSlotId === logicalId ||
-            member.originalSlotId === resourceId ||
-            member.scriptId === logicalId ||
-            member.scriptId === resourceId
+            member.originalSlotId === resourceId
         ));
         if (linkedMember) pushCandidate(linkedMember.id);
 
@@ -94,14 +191,16 @@ class MetadataManager {
             pushCandidate(this.castList[resourceId]);
         }
 
-        for (const [scriptKey, sectionId] of Object.entries(this.lctxMap || {})) {
-            if (sectionId !== logicalId && sectionId !== resourceId) continue;
-
-            const numericScriptId = parseInt(scriptKey, 10);
+        const scriptRefs = [
+            ...(this.scriptSectionMap[logicalId] || []),
+            ...(this.scriptSectionMap[resourceId] || [])
+        ];
+        for (const ref of scriptRefs) {
+            const numericScriptId = ref.slotId;
             const memberByScriptId = members.find(member => member && (member.scriptId === numericScriptId || member.id === numericScriptId));
             if (memberByScriptId) pushCandidate(memberByScriptId.id);
             pushCandidate(numericScriptId);
-            break;
+            if (ref.ownerId) pushCandidate(ref.ownerId);
         }
 
         if (allowSelf) {
@@ -142,6 +241,11 @@ class MetadataManager {
         this.keyTable = {};
         this.resToMember = {};
         this.castList = [];
+        this.scriptToLnam = {};
+        this.lctxMap = {};
+        this.scriptContexts = [];
+        this.scriptSlotMap = {};
+        this.scriptSectionMap = {};
 
         const parsed = KeyTableParser.parse(data, this.extractor.dirFile.ds.endianness, (lvl, msg) => this.extractor.log(lvl, msg));
         if (!parsed) return;
@@ -175,6 +279,12 @@ class MetadataManager {
                 seenIds.add(c.id);
                 lctxChunks.push(c);
             }
+        }
+
+        const contextOwnerBySection = {};
+        for (const [ownerId, map] of Object.entries(this.keyTable)) {
+            const sectionId = map[Magic.LCTX_UPPER] || map[Magic.LctX] || map[Magic.Lctx] || map[Magic.lctx_lower] || map[Magic.XTCL];
+            if (sectionId > 0) contextOwnerBySection[sectionId] = parseInt(ownerId, 10);
         }
 
         for (const chunk of lctxChunks) {
@@ -214,6 +324,15 @@ class MetadataManager {
                     lnamSectionId = ds.readInt32();
                 }
 
+                const ownerId = contextOwnerBySection[chunk.id] || this.resToMember[chunk.id] || null;
+                const context = {
+                    ownerId,
+                    chunkId: chunk.id,
+                    lnamSectionId,
+                    slotToSection: {},
+                    sectionToSlot: {}
+                };
+
                 if (entriesOffset < data.length) {
                     ds.seek(entriesOffset);
                     for (let i = 1; i <= entryCount; i++) {
@@ -227,7 +346,24 @@ class MetadataManager {
                         ds.seek(entryStart + entrySize);
 
                         if (sectionId > -1) {
-                            this.lctxMap[i] = sectionId;
+                            context.slotToSection[i] = sectionId;
+                            context.sectionToSlot[sectionId] = i;
+                            if (!this.scriptSlotMap[i]) this.scriptSlotMap[i] = [];
+                            this.scriptSlotMap[i].push({
+                                ownerId,
+                                chunkId: chunk.id,
+                                sectionId,
+                                slotId: i,
+                                lnamSectionId
+                            });
+                            if (!this.scriptSectionMap[sectionId]) this.scriptSectionMap[sectionId] = [];
+                            this.scriptSectionMap[sectionId].push({
+                                ownerId,
+                                chunkId: chunk.id,
+                                sectionId,
+                                slotId: i,
+                                lnamSectionId
+                            });
                             if (lnamSectionId > -1) {
                                 this.scriptToLnam[sectionId] = lnamSectionId;
                             }
@@ -235,11 +371,27 @@ class MetadataManager {
                     }
 
                 }
+                this.scriptContexts.push(context);
             } catch (e) {
 
                 this.extractor.log('ERROR', `Failed to parse LCTX chunk ${chunk.id}: ${e.message}`);
             }
         }
+
+        let ambiguousSlots = 0;
+        for (const [slotId, refs] of Object.entries(this.scriptSlotMap)) {
+            const uniqueSections = [...new Set(refs.map(ref => ref.sectionId))];
+            if (uniqueSections.length === 1) {
+                this.lctxMap[slotId] = uniqueSections[0];
+            } else if (uniqueSections.length > 1) {
+                ambiguousSlots++;
+            }
+        }
+
+        this.extractor.log(
+            'INFO',
+            `[MetadataManager] Parsed LCTX: contexts=${this.scriptContexts.length}, uniqueSlots=${Object.keys(this.lctxMap).length}, ambiguousSlots=${ambiguousSlots}`
+        );
     }
 
     async parseMCsL() {
@@ -416,9 +568,9 @@ class MetadataManager {
         // If it still fails, check the lctxMap which often bridges the gap in Afterburner.
 
         // 4. LctX map lookup (Legacy fallback)
-        if (this.lctxMap[paletteId]) {
-            const sectionId = this.lctxMap[paletteId];
-            const memberId = this.resolveMemberIdFromResource(sectionId) || sectionId;
+        const lctxRefs = this.scriptSlotMap[paletteId] || [];
+        for (const ref of lctxRefs) {
+            const memberId = this.resolveMemberIdFromResource(ref.sectionId) || ref.sectionId;
             resolved = checkMember(memberId);
             if (resolved) return resolved;
         }
