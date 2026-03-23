@@ -88,8 +88,6 @@ class BitmapExtractor extends BaseExtractor {
         const declaredDepth = member.bitDepth || 8;
         const depths = [32, 16, 8, 4, 1, 2];
         const orderedDepths = [declaredDepth, ...depths.filter(d => d !== declaredDepth)];
-        const alignments = [1, 2, 4, 8, 16, 32, 64, 128];
-
         if (dimSets.length === 0) {
             const inferred = this._inferIndexedGeometry(getMethodData, declaredDepth);
             if (inferred) {
@@ -121,10 +119,17 @@ class BitmapExtractor extends BaseExtractor {
                 const actualLen = data.length;
 
                 for (const dims of dimSets) {
-                    const baseRowBytes = Math.ceil(dims.w * d / 8);
-                    for (const align of alignments) {
-                        const rb = Math.ceil(baseRowBytes / align) * align;
-                        if (rb * dims.h === actualLen) {
+                    const rowByteCandidates = this._getDeclaredRowByteCandidates(member, dims.w, d);
+                    for (const rb of rowByteCandidates) {
+                        const expectedLen = rb * dims.h;
+                        if (expectedLen === actualLen) {
+                            return this._doExtract(data, dims.w, dims.h, d, rb, member, customPalette, alphaBuf, outputPath);
+                        }
+
+                        // Director 8-bit BITD streams can legally unpack to one extra padded row.
+                        // In that case, keep decoding from the flat unpacked stream and only
+                        // consume the rows needed for the target image.
+                        if (this._canUseTrailingIndexedRow(d, actualLen, expectedLen, rb)) {
                             return this._doExtract(data, dims.w, dims.h, d, rb, member, customPalette, alphaBuf, outputPath);
                         }
                     }
@@ -135,10 +140,8 @@ class BitmapExtractor extends BaseExtractor {
         // 4. Special Case: Row-Based PackBits (Legacy variants)
         for (const d of orderedDepths) {
             for (const dims of dimSets) {
-                const baseRowBytes = Math.ceil(dims.w * d / 8);
-                const alignments = [1, 2, 4, 8, 16];
-                for (const align of alignments) {
-                    const rb = Math.ceil(baseRowBytes / align) * align;
+                const rowByteCandidates = this._getDeclaredRowByteCandidates(member, dims.w, d);
+                for (const rb of rowByteCandidates) {
                     // Try Row-Based PackBits on raw and zlib decompressed
                     const zlibData = getMethodData('Zlib');
                     const rowSources = [{ name: 'PackBitsRows', data: bitmapBuf }];
@@ -146,12 +149,34 @@ class BitmapExtractor extends BaseExtractor {
 
                     for (const src of rowSources) {
                         const rowResult = this.decompressPackBitsRows(src.data, rb, dims.h);
-                        if (rowResult && rowResult.actualLen > 0 && rowResult.data.length === rb * dims.h) {
+                        if (rowResult && rowResult.actualLen === rb * dims.h) {
                             return this._doExtract(rowResult.data, dims.w, dims.h, d, rb, member, customPalette, alphaBuf, outputPath);
                         }
                     }
                 }
             }
+        }
+
+        const indexedFallback = this._selectIndexedFallback(getMethodData, dimSets, declaredDepth, member);
+        if (indexedFallback) {
+            if (indexedFallback.inferred === true) {
+                member.width = indexedFallback.w;
+                member.height = indexedFallback.h;
+                this.log('INFO', `Fallback inferred geometry for ${member.name}: ${indexedFallback.w}x${indexedFallback.h} via ${indexedFallback.method}`);
+            } else {
+                this.log('INFO', `Fallback padded geometry for ${member.name}: ${indexedFallback.w}x${indexedFallback.h} via ${indexedFallback.method}`);
+            }
+            return this._doExtract(
+                indexedFallback.data,
+                indexedFallback.w,
+                indexedFallback.h,
+                indexedFallback.depth,
+                indexedFallback.rowBytes,
+                member,
+                customPalette,
+                alphaBuf,
+                outputPath
+            );
         }
 
         // Gracefully handle intentionally empty/dummy sprites
@@ -202,6 +227,123 @@ class BitmapExtractor extends BaseExtractor {
         return null;
     }
 
+    _canUseTrailingIndexedRow(depth, actualLen, expectedLen, rowBytes) {
+        if (depth !== 8) return false;
+        if (actualLen <= expectedLen) return false;
+        return (actualLen - expectedLen) <= rowBytes;
+    }
+
+    _getAlignmentWidthPixels(depth) {
+        switch (depth) {
+            case 1:
+                return 16;
+            case 4:
+            case 32:
+                return 4;
+            case 2:
+            case 8:
+                return 2;
+            case 16:
+                return 1;
+            default:
+                return 2;
+        }
+    }
+
+    _calculateDeclaredRowBytes(width, depth) {
+        if (width <= 0 || depth <= 0) return 0;
+
+        const alignmentWidth = this._getAlignmentWidthPixels(depth);
+        const scanWidthPixels = (width % alignmentWidth === 0)
+            ? width
+            : alignmentWidth * Math.ceil(width / alignmentWidth);
+
+        return Math.ceil((scanWidthPixels * depth) / 8);
+    }
+
+    _getDeclaredRowByteCandidates(member, width, depth) {
+        const candidates = [];
+        const push = (value) => {
+            if (!Number.isInteger(value) || value <= 0) return;
+            if (!candidates.includes(value)) candidates.push(value);
+        };
+
+        push(member?._pitch || 0);
+        push(this._calculateDeclaredRowBytes(width, depth));
+        push(Math.ceil((width * depth) / 8));
+
+        return candidates;
+    }
+
+    _normalizeIndexedLength(data, expectedLen) {
+        if (!data || expectedLen <= 0) return null;
+        if (data.length === expectedLen) return data;
+        if (data.length > expectedLen) return data.slice(0, expectedLen);
+
+        const normalized = Buffer.alloc(expectedLen);
+        data.copy(normalized, 0, 0, data.length);
+        return normalized;
+    }
+
+    _collectDeclaredIndexedCandidates(getMethodData, dimSets, depth, member = null) {
+        if (![1, 2, 4, 8].includes(depth)) return [];
+        const candidates = [];
+
+        for (const method of ['Raw', 'PackBits', 'Zlib', 'Zlib+PackBits']) {
+            const data = getMethodData(method);
+            if (!data || data.length < 32) continue;
+
+            for (const dims of dimSets) {
+                for (const rowBytes of this._getDeclaredRowByteCandidates(member, dims.w, depth)) {
+                    const expectedLen = rowBytes * dims.h;
+                    const normalized = this._normalizeIndexedLength(data, expectedLen);
+                    if (!normalized) continue;
+
+                    const missingBytes = Math.max(0, expectedLen - data.length);
+                    const excessBytes = Math.max(0, data.length - expectedLen);
+                    const score = this._scoreIndexedLayout(normalized, dims.w, dims.h, rowBytes) +
+                        (missingBytes / Math.max(1, dims.h)) +
+                        (excessBytes / Math.max(1, rowBytes));
+
+                    candidates.push({
+                        w: dims.w,
+                        h: dims.h,
+                        rowBytes,
+                        depth,
+                        method,
+                        data: normalized,
+                        score,
+                        inferred: false
+                    });
+                }
+            }
+        }
+
+        candidates.sort((a, b) => a.score - b.score);
+        return candidates;
+    }
+
+    _selectIndexedFallback(getMethodData, dimSets, depth, member = null) {
+        if (dimSets.length === 0 || ![1, 2, 4, 8].includes(depth)) return null;
+
+        const declaredCandidates = this._collectDeclaredIndexedCandidates(getMethodData, dimSets, depth, member);
+        const declared = declaredCandidates[0] || null;
+        const inferred = this._inferIndexedGeometry(getMethodData, depth);
+
+        if (!declared && !inferred) return null;
+        if (!declared) return inferred ? { ...inferred, inferred: true } : null;
+        if (!inferred) return declared;
+
+        // When the file provides an authoritative pitch, trust the declared geometry path.
+        // Heuristics remain necessary only for headless/orphan BITD members where CASt data is absent.
+        if (member && Number.isInteger(member._pitch) && member._pitch > 0) {
+            return declared;
+        }
+
+        if (declared.score <= inferred.score) return declared;
+        return { ...inferred, inferred: true };
+    }
+
     _inferIndexedGeometry(getMethodData, depth = 8) {
         if (![1, 2, 4, 8].includes(depth)) return null;
 
@@ -210,21 +352,47 @@ class BitmapExtractor extends BaseExtractor {
             const data = getMethodData(method);
             if (!data || data.length < 64) continue;
 
-            const inferred = this._inferIndexedLayoutFromBuffer(data, depth);
-            if (inferred) {
+            const inferredLayouts = this._collectIndexedLayoutsFromBuffer(data, depth);
+            for (const inferred of inferredLayouts) {
                 candidates.push({ ...inferred, method, depth, data });
             }
         }
 
         if (candidates.length === 0) return null;
         candidates.sort((a, b) => a.score - b.score);
-        return candidates[0];
+
+        const best = candidates[0];
+        const bestRatio = Math.max(best.w, best.h) / Math.max(1, Math.min(best.w, best.h));
+        const bestHalfSimilarity = this._measureHorizontalHalfSimilarity(best.data, best.w, best.h, best.rowBytes);
+
+        if (bestRatio >= 2.5 && bestHalfSimilarity >= 0.45) {
+            const sameAreaAlternatives = candidates.filter((candidate) => {
+                if (candidate === best) return false;
+                if ((candidate.w * candidate.h) !== (best.w * best.h)) return false;
+                const ratio = Math.max(candidate.w, candidate.h) / Math.max(1, Math.min(candidate.w, candidate.h));
+                return ratio <= 1.25 && candidate.score <= best.score + 15;
+            });
+
+            if (sameAreaAlternatives.length > 0) {
+                sameAreaAlternatives.sort((a, b) => a.score - b.score);
+                return sameAreaAlternatives[0];
+            }
+        }
+
+        return best;
     }
 
     _inferIndexedLayoutFromBuffer(data, depth) {
+        const candidates = this._collectIndexedLayoutsFromBuffer(data, depth);
+        if (candidates.length === 0) return null;
+        candidates.sort((a, b) => a.score - b.score);
+        return candidates[0];
+    }
+
+    _collectIndexedLayoutsFromBuffer(data, depth) {
         const alignments = [1, 2, 4, 8, 16];
         const maxDimension = 512;
-        let best = null;
+        const candidates = [];
 
         for (let height = 2; height <= Math.min(maxDimension, data.length); height++) {
             if ((data.length % height) !== 0) continue;
@@ -254,14 +422,11 @@ class BitmapExtractor extends BaseExtractor {
 
                 const pad = rowBytes - baseRowBytes;
                 const score = this._scoreIndexedLayout(data, width, height, rowBytes) + pad;
-
-                if (!best || score < best.score) {
-                    best = { w: width, h: height, rowBytes, pad, align: matchedAlign, score };
-                }
+                candidates.push({ w: width, h: height, rowBytes, pad, align: matchedAlign, score });
             }
         }
 
-        return best;
+        return candidates;
     }
 
     _scoreIndexedLayout(data, width, height, rowBytes) {
@@ -287,6 +452,31 @@ class BitmapExtractor extends BaseExtractor {
         return diff / Math.max(1, samples);
     }
 
+    _measureHorizontalHalfSimilarity(data, width, height, rowBytes) {
+        if (!data || width < 2 || height < 1) return 0;
+
+        const half = Math.floor(width / 2);
+        if (half < 1 || (half * 2) !== width) return 0;
+
+        let same = 0;
+        let total = 0;
+        for (let y = 0; y < height; y++) {
+            const rowBase = y * rowBytes;
+            for (let x = 0; x < half; x++) {
+                if (data[rowBase + x] === data[rowBase + x + half]) same++;
+                total++;
+            }
+        }
+
+        return same / Math.max(1, total);
+    }
+
+    _getIndexed8RowStride(width, rowBytes) {
+        const compactStride = width + (width % 2);
+        if (compactStride > 0 && rowBytes >= compactStride) return compactStride;
+        return rowBytes;
+    }
+
     _tryZlib(buf) {
         try {
             return zlib.inflateSync(buf);
@@ -304,6 +494,7 @@ class BitmapExtractor extends BaseExtractor {
 
     _processChunkyData(pixelData, width, height, depth, rowBytes, palette, alphaBuf, channelOrder = 'ARGB', member = {}) {
         const dst = Buffer.alloc(width * height * 4);
+        const effectiveRowBytes = depth === 8 ? this._getIndexed8RowStride(width, rowBytes) : rowBytes;
 
         if (!palette && depth <= 8) {
             palette = [];
@@ -360,7 +551,7 @@ class BitmapExtractor extends BaseExtractor {
         }
 
         for (let y = 0; y < height; y++) {
-            const rowStart = y * rowBytes;
+            const rowStart = y * effectiveRowBytes;
             if (rowStart >= pixelData.length) break;
             for (let x = 0; x < width; x++) {
                 let r = 0, g = 0, b = 0, a = 255;
